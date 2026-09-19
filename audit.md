@@ -57,6 +57,41 @@ The architecture leverages a single `contenteditable` host for unified inline ch
     - Implemented `flushPendingHistory()` on `handleUndo` and `handleRedo` to capture uncommitted keystrokes within the debounce window before undoing.
     - Added `Ctrl+Shift+Z` support alongside `Ctrl+Y` for Redo.
 
+### Bug 5: Missing On-Demand Link Preview Stub Generation (Resolved)
+- **Symptom:** Previously, adding or viewing links in notes lacked an option to insert a rich preview stub card below the hyperlink on demand. Automatic generation on paste was unwanted, but clicking an existing link lacked an "Add Preview" button next to Edit.
+- **Fix Applied:**
+  - In [`public/js/utils.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/utils.js):
+    - Extended `parseMarkdown` to parse `> **[Title](url)**\n> Snippet` blockquotes into rich preview cards (`.link-preview-card`) featuring an icon, title, target domain/ID, and an interactive delete button (`×`).
+    - Added general markdown blockquote (`> `) rendering.
+  - In [`public/js/components/editor.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/editor.js):
+    - Added an "Add Preview Stub" button (`<Icons.Eye />`) directly inside the link popover toolbar alongside the "Edit Link" button.
+    - Implemented `handleAddPreview` which resolves internal note titles/snippets or target URLs, creates the preview stub node directly underneath the link's line, and registers changes in history.
+    - Updated `parseHtmlToMarkdown` to preserve preview cards bi-directionally without breaking contenteditable flow.
+    - Handled inline `.preview-delete-btn` clicks to easily dismiss preview cards.
+
+### Bug 6: Graph View Mobile Single-Finger Scrolling & Multi-Touch Pinch (Resolved)
+- **Symptom:** On mobile touchscreens, single-finger panning on the Graph View canvas did not work reliably or at all, while two-finger pinch-to-zoom was erratic or only worked via trackpad wheel emulation.
+- **Root Cause:** In `handlePointerDown`, canvas drag was restricted by `e.target === canvasRef.current`. Because the transformed world container, SVG layer, and background grid covered the entire canvas area, `e.target` was a child container rather than `canvasRef.current`, causing single-finger touches to be completely ignored.
+- **Fix Applied:**
+  - In [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js):
+    - Replaced the brittle `e.target === canvasRef.current` equality check with an exclusion check (`!e.target.closest('[data-node-id], .edge-popover, .snapshots-menu, button, select, input')`). Any touch/click on empty canvas space now initiates smooth panning.
+    - Added `activePointersRef` (Map of pointer IDs) to track multiple touch contacts simultaneously.
+    - Implemented native multi-touch 2-finger pinch-to-zoom and 2-finger pan, calculating pinch distance ratios and midpoint translations.
+    - Added `touch-none` and `onPointerCancel={handlePointerUp}` to prevent browser-native scrolling conflicts.
+
+### Bug 7: Graph View Tag Drag-and-Drop Reparenting (Resolved)
+- **Symptom:** On both mobile and desktop, dragging a tag node onto another tag node only triggered force-separation collision avoidance (`findFreePos`), failing to establish a parent-child relationship. Creating tag hierarchies required dragging a 16px hover crosshair dot that was impossible to use on touch screens.
+- **Root Cause:** Node dragging (`draggingNode`) and node linking (`connectingNode`) were completely decoupled. Dropping a node ran collision pushback instead of detecting drop targets. Furthermore, tapping a node without moving it still triggered collision resolution, causing inadvertent node position shifts.
+- **Fix Applied:**
+  - In [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js):
+    - Added `dropTargetId` state and real-time hover target detection during node drag using `document.elementsFromPoint(e.clientX, e.clientY)`.
+    - Added drop-target visual highlight styling (`ring-4 ring-emerald-500 scale-110 z-30 shadow-2xl`) when hovering over a viable target.
+    - In `handlePointerUp`, if a single node is dragged over another node (distance > 10px):
+      - **Tag dropped onto Tag:** Calls `onTagOperation(childTag, parentTag, true)` to reparent the tag and establish the hierarchy edge immediately.
+      - **Tag dropped onto Note / Note dropped onto Tag:** Calls `onAddTag(noteId, tag)` to tag the note.
+      - Settles the dragged node smoothly next to the target node without overlap.
+    - Added a 4px drag threshold to differentiate taps/clicks from actual drags, eliminating accidental node position shifts on selection taps.
+
 ---
 
 ## 3. High-Priority Findings & Recommended Fixes

@@ -340,7 +340,9 @@ window.parseMarkdown = (text, collapsedLines = new Set(), hideCompleted = false,
         bulletBuffer.length = 0;
     };
 
+    const consumedLines = new Set();
     lines.forEach((line, index) => {
+        if (consumedLines.has(index)) return;
         if (totalItemsRendered >= maxItems) return;
 
         const taskMatch = line.match(/^(\s*)-\s\[([xX\s]?)\]\s*(.*)/i);
@@ -361,6 +363,48 @@ window.parseMarkdown = (text, collapsedLines = new Set(), hideCompleted = false,
             const level = Math.floor(indentSpaces / 2);
             const content = bulletMatch[2];
             bulletBuffer.push({ level, content, originalIndex: index });
+            return;
+        }
+
+        const previewMatch = line.match(/^>\s*\*\*\[([^\]]+)\]\(([^)]+)\)\*\*(?:\s*(.*))?$/);
+        if (previewMatch) {
+            flushTaskBuffer();
+            flushBulletBuffer();
+            const title = previewMatch[1];
+            const url = previewMatch[2];
+            let inlineSnippet = previewMatch[3] || '';
+
+            let nextIdx = index + 1;
+            let nextSnippet = '';
+            if (lines[nextIdx] && lines[nextIdx].startsWith('>')) {
+                nextSnippet = lines[nextIdx].replace(/^>\s*/, '');
+                consumedLines.add(nextIdx);
+            }
+            const snippet = (inlineSnippet ? inlineSnippet + ' ' : '') + nextSnippet;
+
+            const isInternal = url.startsWith('internal://') || /^::[a-z0-9]{4,}$/i.test(url);
+            let displayDomain = '';
+            if (isInternal) {
+                displayDomain = '::' + url.replace('internal://', '').replace(/^::/, '');
+            } else {
+                try { displayDomain = new URL(url).hostname.replace('www.', ''); } catch (e) { displayDomain = url; }
+            }
+
+            const iconSvg = isInternal
+                ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>`
+                : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
+
+            output += `<div class="link-preview-card not-prose my-2.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/90 dark:bg-slate-800/90 flex flex-col gap-1 text-xs select-text shadow-sm transition-all hover:border-slate-300 dark:hover:border-slate-600 relative group" data-url="${url}" data-title="${title}" data-snippet="${snippet.replace(/"/g, '&quot;')}"><div class="flex items-center justify-between gap-2"><div class="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-200 truncate"><span class="p-1 rounded bg-slate-200/60 dark:bg-slate-700 flex items-center justify-center flex-shrink-0">${iconSvg}</span><a href="${url}" class="${isInternal ? 'internal-link' : ''} text-slate-800 dark:text-slate-200 hover:underline truncate">${title}</a></div><div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-400 font-mono px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 flex-shrink-0">${displayDomain}</span><button class="preview-delete-btn p-1 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity" contenteditable="false" title="Remove preview">×</button></div></div>${snippet ? `<p class="preview-snippet text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed whitespace-pre-wrap">${window.processInlineFormatting ? window.processInlineFormatting(snippet) : snippet}</p>` : ''}</div>`;
+            totalItemsRendered++;
+            return;
+        }
+
+        const quoteMatch = line.match(/^>\s*(.*)/);
+        if (quoteMatch) {
+            flushTaskBuffer();
+            flushBulletBuffer();
+            output += `<blockquote class="border-l-4 border-slate-300 dark:border-slate-600 pl-3 py-1 my-1.5 text-gray-600 dark:text-gray-400 italic"><div>${window.processInlineFormatting(quoteMatch[1]) || '<br>'}</div></blockquote>`;
+            totalItemsRendered++;
             return;
         }
 

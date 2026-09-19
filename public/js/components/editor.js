@@ -10,6 +10,21 @@ const parseHtmlToMarkdown = (rootElement) => {
 
         const tagName = node.tagName.toUpperCase();
 
+        if (node.classList && node.classList.contains('link-preview-card')) {
+            const cardUrl = node.getAttribute('data-url') || node.querySelector('a')?.getAttribute('href') || '';
+            const cardTitle = node.getAttribute('data-title') || node.querySelector('a')?.textContent || cardUrl;
+            const cardSnippet = node.getAttribute('data-snippet') || node.querySelector('.preview-snippet')?.textContent || '';
+            if (cardSnippet) {
+                return `\n> **[${cardTitle}](${cardUrl})**\n> ${cardSnippet}\n`;
+            }
+            return `\n> **[${cardTitle}](${cardUrl})**\n`;
+        }
+
+        if (tagName === 'BLOCKQUOTE') {
+            const content = Array.from(node.childNodes).map(processNode).join('').trim();
+            return `\n> ${content}\n`;
+        }
+
         if (tagName === 'DIV' || tagName === 'P') {
             if (node.classList.contains('completed-separator')) return '';
             const content = Array.from(node.childNodes).map(processNode).join('');
@@ -832,6 +847,35 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
             return;
         }
 
+        // 1.6 Delete Preview Stub
+        if (e.target.classList.contains('preview-delete-btn')) {
+            e.preventDefault();
+            e.stopPropagation();
+            const card = e.target.closest('.link-preview-card');
+            if (card) {
+                card.remove();
+                handleContentChange();
+                if (setToast) setToast({ message: 'Preview stub removed', type: 'info' });
+            }
+            return;
+        }
+
+        // 1.7 Direct click on Link inside a Preview Stub
+        const previewCardLink = e.target.closest('.link-preview-card a');
+        if (previewCardLink) {
+            const href = previewCardLink.getAttribute('href');
+            if (href) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (href.startsWith('internal://')) {
+                    handleLinkClickInternal(href.replace('internal://', ''));
+                } else {
+                    window.open(href, linkOpenBehavior === 'sameTab' ? '_self' : '_blank');
+                }
+                return;
+            }
+        }
+
         // 2. Redirect focus if clicking list padding/handle
         if (!li) {
             lastFocusedRef.current = editorRef.current;
@@ -853,11 +897,6 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         if (linkEl) {
             const href = linkEl.getAttribute('href');
             if (href) {
-                if (href.startsWith('internal://')) {
-                    e.preventDefault();
-                    handleLinkClickInternal(href.replace('internal://', ''));
-                    return;
-                }
                 const rect = linkEl.getBoundingClientRect();
                 setActiveLink({ href, rect, node: linkEl, text: linkEl.textContent, isEditing: false });
                 e.preventDefault();
@@ -1698,6 +1737,75 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         handleSaveInternal(false);
         if (onInternalLinkClick) onInternalLinkClick(tid);
     };
+
+    const handleAddPreview = async () => {
+        if (!activeLink) return;
+        const url = activeLink.href;
+        const isInternal = url.startsWith('internal://') || /^::[a-z0-9]{4,}$/i.test(url);
+        
+        let title = activeLink.text && activeLink.text !== url ? activeLink.text : '';
+        let snippet = '';
+        let resolvedUrl = url;
+
+        if (isInternal) {
+            const targetId = url.replace('internal://', '').replace(/^::/, '');
+            const target = allNotes.find(n => (n.shortId && n.shortId.toLowerCase() === targetId.toLowerCase()) || n.id === targetId);
+            title = target?.title || title || 'Untitled Note';
+            snippet = (target?.content || '')
+                .replace(/[-*#>`\[\]\(\)]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .substring(0, 150);
+            if (target?.content && target.content.length > 150) snippet += '...';
+            resolvedUrl = `internal://${target?.shortId || targetId}`;
+        } else {
+            if (!title || title === url) {
+                try {
+                    title = await window.fetchTitle(url);
+                } catch (e) {}
+            }
+            if (!title) {
+                try { title = new URL(url).hostname.replace('www.', ''); } catch (e) { title = url; }
+            }
+            try {
+                snippet = new URL(url).hostname.replace('www.', '');
+            } catch (e) {
+                snippet = url;
+            }
+        }
+
+        // Locate current block inside editor
+        let insertTarget = activeLink.node ? (activeLink.node.closest('li, div, p, blockquote') || activeLink.node.parentElement) : null;
+        if (!insertTarget || !editorRef.current?.contains(insertTarget)) {
+            insertTarget = editorRef.current?.lastElementChild || editorRef.current;
+        }
+
+        const isTargetInternal = resolvedUrl.startsWith('internal://') || /^::[a-z0-9]{4,}$/i.test(resolvedUrl);
+        const displayDomain = isTargetInternal 
+            ? '::' + resolvedUrl.replace('internal://', '').replace(/^::/, '')
+            : (() => { try { return new URL(resolvedUrl).hostname.replace('www.', ''); } catch(e) { return resolvedUrl; } })();
+
+        const iconSvg = isTargetInternal
+            ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>`
+            : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
+
+        const stubDiv = document.createElement('div');
+        stubDiv.className = "link-preview-card not-prose my-2.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/90 dark:bg-slate-800/90 flex flex-col gap-1 text-xs select-text shadow-sm transition-all hover:border-slate-300 dark:hover:border-slate-600 relative group";
+        stubDiv.setAttribute('data-url', resolvedUrl);
+        stubDiv.setAttribute('data-title', title);
+        stubDiv.setAttribute('data-snippet', snippet);
+        stubDiv.innerHTML = `<div class="flex items-center justify-between gap-2"><div class="flex items-center gap-2 font-semibold text-slate-800 dark:text-slate-200 truncate"><span class="p-1 rounded bg-slate-200/60 dark:bg-slate-700 flex items-center justify-center flex-shrink-0">${iconSvg}</span><a href="${resolvedUrl}" class="${isTargetInternal ? 'internal-link' : ''} text-slate-800 dark:text-slate-200 hover:underline truncate">${title}</a></div><div class="flex items-center gap-1.5"><span class="text-[10px] text-gray-400 font-mono px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 flex-shrink-0">${displayDomain}</span><button class="preview-delete-btn p-1 text-gray-400 hover:text-red-500 rounded opacity-0 group-hover:opacity-100 transition-opacity" contenteditable="false" title="Remove preview">×</button></div></div>${snippet ? `<p class="preview-snippet text-gray-500 dark:text-gray-400 mt-1 line-clamp-2 leading-relaxed whitespace-pre-wrap">${window.processInlineFormatting ? window.processInlineFormatting(snippet) : snippet}</p>` : ''}`;
+
+        if (insertTarget && insertTarget.parentNode && insertTarget !== editorRef.current) {
+            insertTarget.parentNode.insertBefore(stubDiv, insertTarget.nextSibling);
+        } else if (editorRef.current) {
+            editorRef.current.appendChild(stubDiv);
+        }
+
+        handleContentChange();
+        setActiveLink(null);
+        if (setToast) setToast({ message: 'Preview stub added', type: 'success' });
+    };
     
     // Toggle between list view and text view (Just cosmetic/helper now)
     const handleTextToList = () => {
@@ -2194,7 +2302,15 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                             </div>
                             <div className="h-6 w-px bg-gray-200 dark:bg-gray-700"></div>
                             <button onClick={() => setActiveLink({...activeLink, isEditing: true})} className="p-1.5 text-gray-500 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/30 rounded-md transition-colors" title="Edit Link"><Icons.Edit size={16} /></button>
-                            <button onClick={() => { window.open(activeLink.href, linkOpenBehavior === 'sameTab' ? '_self' : '_blank'); setActiveLink(null); }} className="p-1.5 text-gray-500 hover:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-md transition-colors" title="Open Link"><Icons.ExternalLink size={16} /></button>
+                            <button onClick={handleAddPreview} className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-md transition-colors" title="Add Preview Stub"><Icons.Eye size={16} /></button>
+                            <button onClick={() => { 
+                                if (activeLink.href.startsWith('internal://')) {
+                                    handleLinkClickInternal(activeLink.href.replace('internal://', ''));
+                                } else {
+                                    window.open(activeLink.href, linkOpenBehavior === 'sameTab' ? '_self' : '_blank'); 
+                                }
+                                setActiveLink(null); 
+                            }} className="p-1.5 text-gray-500 hover:text-slate-600 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-md transition-colors" title="Open Link"><Icons.ExternalLink size={16} /></button>
                             <button onClick={() => setActiveLink(null)} className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-md transition-colors" title="Close"><Icons.X size={16} /></button>
                         </>
                     )}

@@ -16,10 +16,13 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
     const [snapshotName, setSnapshotName] = React.useState('');
     const [selectedNodeIds, setSelectedNodeIds] = React.useState(new Set());
     const [selectionBox, setSelectionBox] = React.useState(null);
+    const [dropTargetId, setDropTargetId] = React.useState(null);
     
     const canvasRef = React.useRef(null);
     const workerRef = React.useRef(null);
     const lastMouseRef = React.useRef({ x: 0, y: 0 });
+    const activePointersRef = React.useRef(new Map());
+    const pinchStartRef = React.useRef(null);
     const TAG_PREFIX = 'TAG__';
     const GRID_SIZE = 20;
 
@@ -284,36 +287,96 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
         if (selectedEdge && !e.target.closest('.edge-popover')) setSelectedEdge(null);
         if (showSnapshots && !e.target.closest('.snapshots-menu')) setShowSnapshots(false);
 
-        // Check for node interaction
+        if (e.pointerId !== undefined) {
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        // Multi-touch pinch zoom & pan initiation
+        if (activePointersRef.current.size === 2) {
+            setIsDraggingCanvas(false);
+            setDraggingNode(null);
+            setSelectionBox(null);
+            if (longPressTimeoutRef.current) {
+                clearTimeout(longPressTimeoutRef.current);
+                longPressTimeoutRef.current = null;
+            }
+
+            const pts = Array.from(activePointersRef.current.values());
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            pinchStartRef.current = {
+                dist: Math.max(dist, 1),
+                scale: scaleRef.current,
+                pan: { ...panRef.current },
+                mid
+            };
+            return;
+        }
+
+        // Check for node interaction or interactive controls
         const nodeEl = e.target.closest('[data-node-id]');
+        const isInteractive = e.target.closest('.edge-popover, .snapshots-menu, button, select, input');
+        if (nodeEl || isInteractive) {
+            return;
+        }
         
-        // If clicking canvas with Shift => Start Selection Box
-        if (e.shiftKey && !nodeEl && e.button === 0) {
+        // If clicking canvas background with Shift => Start Selection Box
+        if (e.shiftKey && e.button === 0) {
             e.preventDefault();
             const rect = canvasRef.current.getBoundingClientRect();
             const startX = (e.clientX - rect.left - pan.x) / scale;
             const startY = (e.clientY - rect.top - pan.y) / scale;
             setSelectionBox({ startX, startY, currentX: startX, currentY: startY });
             lastMouseRef.current = { x: e.clientX, y: e.clientY };
-            e.target.setPointerCapture(e.pointerId);
+            try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
             return;
         }
 
-        if (e.button === 1 || (e.button === 0 && e.target === canvasRef.current && !e.shiftKey)) { 
+        // Single-finger touch or Left-click or Middle-click on canvas background
+        if (e.button === 1 || (e.button === 0 && !e.shiftKey)) { 
             e.preventDefault();
             setIsDraggingCanvas(true);
             // Clear selection unless Shift/Ctrl
             if (!e.shiftKey && !e.ctrlKey) setSelectedNodeIds(new Set());
             lastMouseRef.current = { x: e.clientX, y: e.clientY };
-            e.target.setPointerCapture(e.pointerId);
+            try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
         }
     };
 
     const handlePointerMove = (e) => {
-        const rect = canvasRef.current.getBoundingClientRect();
+        if (e.pointerId !== undefined && activePointersRef.current.has(e.pointerId)) {
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        const rect = canvasRef.current ? canvasRef.current.getBoundingClientRect() : { left: 0, top: 0 };
         const mouseX = (e.clientX - rect.left - pan.x) / scale;
         const mouseY = (e.clientY - rect.top - pan.y) / scale;
         setMousePos({ x: mouseX, y: mouseY });
+
+        // Two-finger pinch-to-zoom and pan
+        if (activePointersRef.current.size >= 2 && pinchStartRef.current) {
+            const pts = Array.from(activePointersRef.current.values());
+            const currentDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const currentMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+
+            const start = pinchStartRef.current;
+            const zoomRatio = currentDist / start.dist;
+            const newScale = Math.min(Math.max(0.1, start.scale * zoomRatio), 5);
+
+            const midCanvasX = currentMid.x - rect.left;
+            const midCanvasY = currentMid.y - rect.top;
+
+            const panDx = currentMid.x - start.mid.x;
+            const panDy = currentMid.y - start.mid.y;
+
+            const scaleFactor = newScale / start.scale;
+            const newPanX = start.pan.x + panDx - (midCanvasX - start.pan.x) * (scaleFactor - 1);
+            const newPanY = start.pan.y + panDy - (midCanvasY - start.pan.y) * (scaleFactor - 1);
+
+            setScale(newScale);
+            setPan({ x: newPanX, y: newPanY });
+            return;
+        }
 
         if (selectionBox) {
             setSelectionBox(prev => ({ ...prev, currentX: mouseX, currentY: mouseY }));
@@ -338,6 +401,7 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
             }
 
             setDraggingNode(prev => {
+                if (!prev) return null;
                 const newNodes = prev.nodes.map(n => {
                     const rawX = n.startX + (e.clientX - prev.startMouseX) / scale;
                     const rawY = n.startY + (e.clientY - prev.startMouseY) / scale;
@@ -345,12 +409,39 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
                 });
                 return { ...prev, nodes: newNodes };
             });
+
+            // Hover detection for drop target when dragging a single node
+            if (draggingNode.nodes.length === 1) {
+                const moveDist = Math.hypot(e.clientX - draggingNode.startMouseX, e.clientY - draggingNode.startMouseY);
+                if (moveDist > 10) {
+                    const elements = document.elementsFromPoint(e.clientX, e.clientY) || [];
+                    const targetEl = elements.find(el => {
+                        const nodeCard = el.closest && el.closest('[data-node-id]');
+                        if (!nodeCard) return false;
+                        const nid = nodeCard.getAttribute('data-node-id');
+                        return nid && nid !== draggingNode.nodes[0].id;
+                    });
+                    const hoverId = targetEl ? targetEl.closest('[data-node-id]').getAttribute('data-node-id') : null;
+                    setDropTargetId(hoverId);
+                } else {
+                    setDropTargetId(null);
+                }
+            }
+
             lastMouseRef.current = { x: e.clientX, y: e.clientY };
         }
-    }
+    };
 
     const handlePointerUp = (e) => {
+        if (e.pointerId !== undefined) {
+            activePointersRef.current.delete(e.pointerId);
+        }
+        if (activePointersRef.current.size < 2) {
+            pinchStartRef.current = null;
+        }
+
         setIsDraggingCanvas(false);
+        setDropTargetId(null);
 
         if (longPressTimeoutRef.current) {
             clearTimeout(longPressTimeoutRef.current);
@@ -384,38 +475,103 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
         }
 
         if (draggingNode) {
-            const updates = [];
+            const moveDist = Math.hypot(e.clientX - draggingNode.startMouseX, e.clientY - draggingNode.startMouseY);
 
-            draggingNode.nodes.forEach(dn => {
-                const totalDx = (e.clientX - draggingNode.startMouseX) / scale;
-                const totalDy = (e.clientY - draggingNode.startMouseY) / scale;
-                let finalX = dn.startX + totalDx;
-                let finalY = dn.startY + totalDy;
+            // Check if single node was dropped onto another node
+            if (draggingNode.nodes.length === 1 && moveDist > 10) {
+                const elements = document.elementsFromPoint(e.clientX, e.clientY) || [];
+                const targetEl = elements.find(el => {
+                    const nodeCard = el.closest && el.closest('[data-node-id]');
+                    if (!nodeCard) return false;
+                    const nid = nodeCard.getAttribute('data-node-id');
+                    return nid && nid !== draggingNode.nodes[0].id;
+                });
 
-                if (draggingNode.nodes.length === 1) {
-                    const resolved = findFreePos({ id: dn.id, nodeType: dn.nodeType }, finalX, finalY);
-                    finalX = resolved.x;
-                    finalY = resolved.y;
-                } else if (isSnapEnabled) {
-                    finalX = snap(finalX);
-                    finalY = snap(finalY);
+                if (targetEl) {
+                    const targetNodeId = targetEl.closest('[data-node-id]').getAttribute('data-node-id');
+                    const targetNode = nodesWithPos.find(n => n.id === targetNodeId);
+                    const draggedNode = draggingNode.nodes[0];
+
+                    if (targetNode) {
+                        const sourceId = draggedNode.originalId;
+                        const targetId = targetNode.originalId || targetNode.id;
+                        const sourceType = draggedNode.nodeType;
+                        const targetType = targetNode.nodeType;
+
+                        let handled = false;
+
+                        // 1. Tag dropped on Tag -> reparent (dragged becomes child of target)
+                        if (sourceType === 'tag' && targetType === 'tag') {
+                            if (onTagOperation) {
+                                onTagOperation(sourceId, targetId, true);
+                                handled = true;
+                            }
+                        }
+                        // 2. Tag dropped on Note -> tag the note
+                        else if (sourceType === 'tag' && targetType === 'note') {
+                            if (onAddTag) {
+                                onAddTag(targetId, sourceId);
+                                handled = true;
+                            }
+                        }
+                        // 3. Note dropped on Tag -> tag the note
+                        else if (sourceType === 'note' && targetType === 'tag') {
+                            if (onAddTag) {
+                                onAddTag(sourceId, targetId);
+                                handled = true;
+                            }
+                        }
+
+                        if (handled) {
+                            // Settle dragged node near target without direct overlap
+                            const free = findFreePos({ id: draggedNode.id, nodeType: draggedNode.nodeType }, targetNode.x + 30, targetNode.y + 40);
+                            if (draggedNode.nodeType === 'tag') {
+                                if (onSaveTagLayout) onSaveTagLayout(draggedNode.originalId, free.x, free.y);
+                            } else {
+                                if (onBatchSaveLayout) onBatchSaveLayout([{ id: draggedNode.originalId, x: free.x, y: free.y, type: 'note' }]);
+                            }
+                            setDraggingNode(null);
+                            return;
+                        }
+                    }
                 }
+            }
 
-                if (dn.nodeType === 'tag') {
-                    if (onSaveTagLayout) onSaveTagLayout(dn.originalId, finalX, finalY);
-                } else {
-                     updates.push({ id: dn.originalId, x: finalX, y: finalY, type: 'note' });
+            // Only update layout if actually moved (more than 4px tap threshold)
+            if (moveDist > 4) {
+                const updates = [];
+
+                draggingNode.nodes.forEach(dn => {
+                    const totalDx = (e.clientX - draggingNode.startMouseX) / scale;
+                    const totalDy = (e.clientY - draggingNode.startMouseY) / scale;
+                    let finalX = dn.startX + totalDx;
+                    let finalY = dn.startY + totalDy;
+
+                    if (draggingNode.nodes.length === 1) {
+                        const resolved = findFreePos({ id: dn.id, nodeType: dn.nodeType }, finalX, finalY);
+                        finalX = resolved.x;
+                        finalY = resolved.y;
+                    } else if (isSnapEnabled) {
+                        finalX = snap(finalX);
+                        finalY = snap(finalY);
+                    }
+
+                    if (dn.nodeType === 'tag') {
+                        if (onSaveTagLayout) onSaveTagLayout(dn.originalId, finalX, finalY);
+                    } else {
+                         updates.push({ id: dn.originalId, x: finalX, y: finalY, type: 'note' });
+                    }
+                });
+                
+                if (updates.length > 0) {
+                     if (onBatchSaveLayout) onBatchSaveLayout(updates);
                 }
-            });
-            
-            if (updates.length > 0) {
-                 if (onBatchSaveLayout) onBatchSaveLayout(updates);
             }
 
             setDraggingNode(null);
         }
         if (connectingNode) {
-            const elements = document.elementsFromPoint(e.clientX, e.clientY);
+            const elements = document.elementsFromPoint(e.clientX, e.clientY) || [];
             const targetEl = elements.find(el => el.closest && el.closest('[data-node-id]'));
             if (targetEl) {
                 const nodeId = targetEl.closest('[data-node-id]').getAttribute('data-node-id');
@@ -435,6 +591,32 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
         }
 
         e.stopPropagation();
+
+        if (e.pointerId !== undefined) {
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+
+        // Multi-touch pinch zoom & pan initiation
+        if (activePointersRef.current.size === 2) {
+            setIsDraggingCanvas(false);
+            setDraggingNode(null);
+            setSelectionBox(null);
+            if (longPressTimeoutRef.current) {
+                clearTimeout(longPressTimeoutRef.current);
+                longPressTimeoutRef.current = null;
+            }
+
+            const pts = Array.from(activePointersRef.current.values());
+            const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+            pinchStartRef.current = {
+                dist: Math.max(dist, 1),
+                scale: scaleRef.current,
+                pan: { ...panRef.current },
+                mid
+            };
+            return;
+        }
         
         // Start long press detection
         if (node.nodeType === 'note') {
@@ -594,7 +776,7 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
                 </div>
             </div>
 
-            <div ref={canvasRef} className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing overflow-hidden" style={{ touchAction: 'none' }} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerLeave={handlePointerUp}>
+            <div ref={canvasRef} className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing overflow-hidden" style={{ touchAction: 'none' }} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onPointerLeave={handlePointerUp}>
                 <div className="absolute top-0 left-0 transform-origin-0-0 will-change-transform" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}>
                     <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-10" style={{ backgroundImage: isSnapEnabled ? `radial-gradient(#fff 1px, transparent 1px)` : 'none', backgroundSize: `${GRID_SIZE}px ${GRID_SIZE}px` }} />
                     <svg className="absolute top-0 left-0 overflow-visible pointer-events-none" style={{ width: 1, height: 1 }}>
@@ -629,8 +811,9 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
                         const pos = dragNode ? { x: dragNode.currentX, y: dragNode.currentY } : { x: node.x, y: node.y };
                         const isTag = node.nodeType === 'tag';
                         const isSelected = selectedNodeIds.has(node.id);
+                        const isDropTarget = dropTargetId === node.id;
                         return (
-                            <div key={node.id} data-node-id={node.id} className={`absolute flex flex-col group shadow-md border transition-shadow hover:shadow-xl ${isSelected ? 'ring-2 ring-slate-500' : ''} ${isTag ? 'w-[100px] h-[30px] rounded-full bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 justify-center items-center' : 'w-[200px] rounded-lg bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`} style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, opacity: node.isArchived ? 0.6 : 1 }} onPointerDown={(e) => handleNodeDragStart(e, node)} onPointerUp={() => handleNodeConnectEnd(node)} onContextMenu={(e) => { if (node.nodeType === 'note') { e.preventDefault(); e.stopPropagation(); if (longPressTimeoutRef.current) { clearTimeout(longPressTimeoutRef.current); longPressTimeoutRef.current = null; } onEdit(node); } }}>
+                            <div key={node.id} data-node-id={node.id} className={`absolute flex flex-col group shadow-md border touch-none transition-all ${isDropTarget ? 'ring-4 ring-emerald-500 scale-110 z-30 shadow-2xl' : isSelected ? 'ring-2 ring-slate-500' : 'hover:shadow-xl'} ${isTag ? 'w-[100px] h-[30px] rounded-full bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 justify-center items-center' : 'w-[200px] rounded-lg bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'}`} style={{ transform: `translate(${pos.x}px, ${pos.y}px)`, opacity: node.isArchived ? 0.6 : 1 }} onPointerDown={(e) => handleNodeDragStart(e, node)} onPointerUp={() => handleNodeConnectEnd(node)} onContextMenu={(e) => { if (node.nodeType === 'note') { e.preventDefault(); e.stopPropagation(); if (longPressTimeoutRef.current) { clearTimeout(longPressTimeoutRef.current); longPressTimeoutRef.current = null; } onEdit(node); } }}>
                                 {isTag ? ( <div className="font-bold text-xs text-gray-700 dark:text-gray-300 truncate px-2 pointer-events-none">{node.title}</div> ) : ( <> <div className={`p-2 border-b border-gray-100 dark:border-gray-700 rounded-t-lg flex justify-between items-center cursor-move ${node.isArchived ? 'bg-gray-100 dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-750'}`}> <div className="font-bold text-xs truncate max-w-[150px] text-gray-700 dark:text-gray-200 flex items-center gap-1"> {node.isArchived && <Icons.Archive size={10} className="text-gray-400" />} {node.title || "Untitled"} </div> <button onClick={(e) => { e.stopPropagation(); onEdit(node); }} className="text-gray-400 hover:text-slate-500"><Icons.Edit size={12} /></button> </div> <div className="p-2 text-[10px] text-gray-500 dark:text-gray-400 line-clamp-3 h-[50px] overflow-hidden pointer-events-none prose-mini" dangerouslySetInnerHTML={{ __html: window.parseMarkdown(node.content || '', new Set(), true, 5) }}></div> </> )}
                                 <div className="absolute right-[-8px] top-1/2 -translate-y-1/2 w-4 h-4 bg-slate-500 rounded-full cursor-crosshair opacity-0 group-hover:opacity-100 transition-opacity border-2 border-white dark:border-gray-900 shadow-sm z-10 hover:scale-125" onPointerDown={(e) => handleNodeConnectStart(e, node)} title="Drag to link" />
                             </div>
