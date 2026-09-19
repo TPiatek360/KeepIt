@@ -77,7 +77,11 @@ const parseHtmlToMarkdown = (rootElement) => {
             case 'I': case 'EM': return `_${content}_`;
             case 'SPAN': 
                 if (node.classList.contains('task-handle') || node.classList.contains('task-checkbox') || node.classList.contains('task-delete')) return '';
-                if (node.id && node.id.startsWith('pending-link-')) return `<span id="${node.id}">${content}</span>`;
+                if (node.id && node.id.startsWith('pending-link-')) {
+                    const selAttr = node.getAttribute('data-selected-text');
+                    const attrStr = selAttr ? ` data-selected-text="${selAttr.replace(/"/g, '&quot;')}"` : '';
+                    return `<span id="${node.id}"${attrStr}>${content}</span>`;
+                }
                 return content;
             default: return content;
         }
@@ -433,28 +437,62 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         setLastSavedAt(liveNote.updatedAt?.seconds || Date.now() / 1000);
     };
 
-    // Enforce cursor position: Prevent cursor from landing outside task-content in a task-line
+    // Robust Caret Positioning: Ensures caret lands in an actual TextNode inside list item content
+    const setCaretInContent = (contentEl, atStart = true) => {
+        if (!contentEl) return;
+        let textNode = null;
+        for (let i = 0; i < contentEl.childNodes.length; i++) {
+            const child = contentEl.childNodes[i];
+            if (child.nodeType === 3) {
+                textNode = child;
+                if (atStart) break;
+            }
+        }
+        if (!textNode) {
+            textNode = document.createTextNode('');
+            if (contentEl.firstChild) {
+                contentEl.insertBefore(textNode, contentEl.firstChild);
+            } else {
+                contentEl.appendChild(textNode);
+            }
+        }
+        const sel = window.getSelection();
+        const r = document.createRange();
+        const offset = atStart ? 0 : textNode.textContent.length;
+        r.setStart(textNode, offset);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+    };
+
+    // Enforce cursor position & track selections:
+    // 1. Prevents cursor from landing on LI flex container or uneditable widgets (behind checkbox).
+    // 2. Keeps selectionRef updated for link insertion so selection isn't lost on button click.
     React.useEffect(() => {
         if (!isOpen) return;
 
         const enforceSelection = () => {
             const sel = window.getSelection();
-            if (!sel.rangeCount || !sel.isCollapsed) return;
-            
+            if (!sel || !sel.rangeCount) return;
+
+            // Track active text selections inside editor for link insertion
+            if (editorRef.current && editorRef.current.contains(sel.anchorNode)) {
+                if (!sel.isCollapsed) {
+                    selectionRef.current = sel.getRangeAt(0).cloneRange();
+                }
+            }
+
+            if (!sel.isCollapsed) return;
+
             const node = sel.anchorNode;
             const element = node.nodeType === 3 ? node.parentNode : node;
-            
-            const li = element.closest('.task-line');
-            if (li) {
-                const content = li.querySelector('.task-content');
-                // If we found a task line, but the selection is NOT inside the content wrapper
-                // (e.g., it's on the LI itself, or the handles/checkboxes)
-                if (content && !content.contains(node)) {
-                    const range = document.createRange();
-                    range.setStart(content, 0);
-                    range.collapse(true);
-                    sel.removeAllRanges();
-                    sel.addRange(range);
+
+            const li = element.closest('.task-line, .bullet-line');
+            if (li && editorRef.current?.contains(li)) {
+                const content = li.querySelector('.task-content, .bullet-content');
+                // If selection landed on the LI itself, handles, checkboxes, or outside text node
+                if (content && (!content.contains(node) || node === content)) {
+                    setCaretInContent(content, true);
                 }
             }
         };
@@ -605,13 +643,7 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         if (li && !e.target.classList.contains(contentClass.substring(1)) && !e.target.closest(contentClass)) {
             const content = li.querySelector(contentClass);
             if (content) {
-                const range = document.createRange();
-                const sel = window.getSelection();
-                range.selectNodeContents(content);
-                range.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(range);
-                content.focus();
+                setCaretInContent(content, false);
             }
         }
 
@@ -840,15 +872,10 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                     }
                 }
 
-                // Move cursor to new line
+                // Move cursor to new line inside the text content (never behind the checkbox)
                 const target = isTask ? newLine.querySelector('.task-content') : newLine.querySelector('.bullet-content');
                 if (target) {
-                    const r = document.createRange();
-                    r.setStart(target, 0);
-                    r.collapse(true);
-                    selection.removeAllRanges();
-                    selection.addRange(r);
-                    editorRef.current.focus();
+                    setCaretInContent(target, true);
                 }
             }
             handleContentChange();
@@ -1122,10 +1149,12 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         document.removeEventListener('pointerup', handleGlobalPointerUp);
     };
 
-    // --- Link Insertion (Same logic, simplified for single editor) ---
+    // --- Link Insertion ---
     const saveSelection = () => {
         const selection = window.getSelection();
-        if (selection.rangeCount > 0) selectionRef.current = selection.getRangeAt(0).cloneRange();
+        if (selection.rangeCount > 0 && editorRef.current?.contains(selection.anchorNode)) {
+            selectionRef.current = selection.getRangeAt(0).cloneRange();
+        }
     };
     const restoreSelection = () => {
         if (selectionRef.current) {
@@ -1136,14 +1165,34 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
     };
     
     const onInsertLink = () => {
+        let range = null;
         const selection = window.getSelection();
-        if (!selection.rangeCount) return;
-        const range = selection.getRangeAt(0);
 
-        // Check if inside editor
-        if (!editorRef.current.contains(range.commonAncestorContainer)) return;
+        // 1. Check current live selection inside editor
+        if (selection.rangeCount > 0 && editorRef.current?.contains(selection.anchorNode)) {
+            const curRange = selection.getRangeAt(0);
+            if (!curRange.collapsed) {
+                range = curRange.cloneRange();
+            }
+        }
 
-        let node = selection.anchorNode;
+        // 2. If current selection collapsed or blurred to toolbar, check cached selectionRef
+        if (!range && selectionRef.current && !selectionRef.current.collapsed) {
+            if (editorRef.current?.contains(selectionRef.current.commonAncestorContainer)) {
+                range = selectionRef.current.cloneRange();
+                selection.removeAllRanges();
+                selection.addRange(range);
+            }
+        }
+
+        // 3. Fallback to collapsed caret position inside editor
+        if (!range && selection.rangeCount > 0 && editorRef.current?.contains(selection.anchorNode)) {
+            range = selection.getRangeAt(0);
+        }
+
+        if (!range || !editorRef.current?.contains(range.commonAncestorContainer)) return;
+
+        let node = range.startContainer;
         if (node?.nodeType === 3) node = node.parentNode;
         const linkEl = node?.closest('a');
         let existingUrl = linkEl ? linkEl.getAttribute('href') : "https://";
@@ -1169,32 +1218,44 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
             }
         }
 
+        // Capture highlighted text for reliable retrieval when modal returns
+        const capturedText = span.textContent || "";
+        span.setAttribute('data-selected-text', capturedText);
+
         handleContentChange(); // Persist the span marker
 
         setPromptModal({
             isOpen: true,
             title: "Insert Link",
-            placeholder: "https://example.com",
+            placeholder: "https://example.com or ::noteId",
             defaultValue: existingUrl,
             onSubmit: (url) => {
-                const spanInDom = editorRef.current.querySelector(`span[id="${linkId}"]`);
+                const spanInDom = editorRef.current?.querySelector(`span[id="${linkId}"]`);
                 if (!spanInDom) return; 
 
                 if (url) {
                     let finalUrl = url.trim();
+                    let isInternal = false;
+
                     // Handle ::id or raw id for internal links
                     if (finalUrl.match(/^::[a-z0-9]{4,}$/i)) {
                         finalUrl = `internal://${finalUrl.substring(2)}`;
+                        isInternal = true;
                     } else if (finalUrl.match(/^[a-z0-9]{4,}$/i) && !finalUrl.includes(':') && !finalUrl.includes('.')) {
                         // Check if it's a known shortId
                         const exists = allNotes.some(n => n.shortId === finalUrl);
-                        if (exists) finalUrl = `internal://${finalUrl}`;
+                        if (exists) {
+                            finalUrl = `internal://${finalUrl}`;
+                            isInternal = true;
+                        }
+                    } else if (finalUrl.startsWith('internal://')) {
+                        isInternal = true;
                     }
 
-                    const text = spanInDom.textContent;
-                    if (!linkEl && text.trim() === '') {
+                    const originalText = spanInDom.getAttribute('data-selected-text') || spanInDom.textContent || "";
+                    if (!linkEl && originalText.trim() === '') {
                         const pendingLinkId = `pending-insert-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-                        spanInDom.outerHTML = `\u200B<a href="${finalUrl}" data-pending-link="${pendingLinkId}">${url}</a>\u200B`;
+                        spanInDom.outerHTML = `\u200B<a href="${finalUrl}" class="${isInternal ? 'internal-link' : ''}" data-pending-link="${pendingLinkId}">${url}</a>\u200B`;
                         if (finalUrl.startsWith('http')) {
                             window.fetchTitle(finalUrl).then(title => {
                                 if (title && editorRef.current) {
@@ -1208,12 +1269,14 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                             }).catch(console.error);
                         }
                     } else {
-                        const finalText = text || url;
-                        spanInDom.outerHTML = `\u200B<a href="${finalUrl}" class="${finalUrl.startsWith('internal://') ? 'internal-link' : ''}">${finalText}</a>\u200B`;
+                        // Text WAS highlighted: Preserve highlighted text as anchor text!
+                        const finalText = originalText || url;
+                        spanInDom.outerHTML = `\u200B<a href="${finalUrl}" class="${isInternal ? 'internal-link' : ''}">${finalText}</a>\u200B`;
                     }
                 } else {
                     spanInDom.outerHTML = spanInDom.innerHTML;
                 }
+                selectionRef.current = null;
                 handleContentChange();
             }
         });
@@ -1298,12 +1361,7 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                 // Move cursor to .bullet-content
                 const bulletContent = newLi.querySelector('.bullet-content');
                 if (bulletContent) {
-                    const r = document.createRange();
-                    r.setStart(bulletContent, 0);
-                    r.collapse(true);
-                    selection.removeAllRanges();
-                    selection.addRange(r);
-                    editorRef.current.focus();
+                    setCaretInContent(bulletContent, false);
                 }
 
                 const ul = newLi.closest('ul');
@@ -1348,11 +1406,9 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                 }
                 
                 const newContent = li.querySelector('.task-content');
-                const r = document.createRange();
-                r.selectNodeContents(newContent);
-                r.collapse(false);
-                selection.removeAllRanges();
-                selection.addRange(r);
+                if (newContent) {
+                    setCaretInContent(newContent, false);
+                }
             }
         } else {
             // Not in a list. Use execCommand to create a standard list, then convert the current item.
@@ -1373,11 +1429,9 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                 }
 
                 const newContent = newLi.querySelector('.task-content');
-                const r = document.createRange();
-                r.selectNodeContents(newContent);
-                r.collapse(false);
-                selection.removeAllRanges();
-                selection.addRange(r);
+                if (newContent) {
+                    setCaretInContent(newContent, false);
+                }
             }
         }
         handleContentChange();

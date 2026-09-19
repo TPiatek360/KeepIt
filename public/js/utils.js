@@ -140,7 +140,8 @@ window.processInlineFormatting = (text) => {
     // Links & Images
     text = text.replace(/(!?)\[([^\]]+)\]\(([^)]+)\)/g, (match, p1, p2, p3) => {
         if (p1 === '!') return `<img src="${p3}" alt="${p2}" />`;
-        return `\u200B<a href="${p3}">${p2}</a>\u200B`;
+        const isInternal = p3.startsWith('internal://');
+        return `\u200B<a href="${p3}" class="${isInternal ? 'internal-link' : ''}">${p2}</a>\u200B`;
     });
     
     // Internal Links (must be preceded by start of line, whitespace, or open punctuation)
@@ -169,7 +170,7 @@ window.parseMarkdown = (text, collapsedLines = new Set(), hideCompleted = false,
     if (!text) return '<div><br></div>';
     
     let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    html = html.replace(/&lt;span id="(pending-link-\d+)"&gt;(.*?)&lt;\/span&gt;/g, '<span id="$1">$2</span>');
+    html = html.replace(/&lt;span id="(pending-link-\d+)"(.*?)&gt;(.*?)&lt;\/span&gt;/g, '<span id="$1"$2>$3</span>');
 
     const lines = html.split('\n');
     let output = '';
