@@ -149,6 +149,108 @@ const SettingsModal = ({ isOpen, onClose, theme, setTheme, saturation, setSatura
     const [importStrategy, setImportStrategy] = React.useState('skip');
     const importFileRef = React.useRef(null);
 
+    // API & Developer state
+    const authState = window.useAuth ? window.useAuth() : null;
+    const currentUser = authState?.user;
+    const [apiKeys, setApiKeys] = React.useState([]);
+    const [loadingKeys, setLoadingKeys] = React.useState(false);
+    const [newKeyName, setNewKeyName] = React.useState('');
+    const [generatingKey, setGeneratingKey] = React.useState(false);
+    const [generatedKeyResult, setGeneratedKeyResult] = React.useState(null);
+    const [copiedKey, setCopiedKey] = React.useState(false);
+    const [copiedEndpoint, setCopiedEndpoint] = React.useState(false);
+    const [apiKeyError, setApiKeyError] = React.useState('');
+
+    const fetchApiKeys = React.useCallback(async () => {
+        if (!currentUser) return;
+        try {
+            setLoadingKeys(true);
+            setApiKeyError('');
+            const token = await currentUser.getIdToken();
+            const res = await fetch('/api/v1/keys', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Failed to fetch API keys');
+            }
+            const data = await res.json();
+            setApiKeys(data.keys || []);
+        } catch (err) {
+            console.error("Error loading API keys:", err);
+            setApiKeyError(err.message);
+        } finally {
+            setLoadingKeys(false);
+        }
+    }, [currentUser]);
+
+    React.useEffect(() => {
+        if (activeTab === 'api' && currentUser) {
+            fetchApiKeys();
+        }
+    }, [activeTab, currentUser, fetchApiKeys]);
+
+    const handleCreateKey = async (e) => {
+        if (e) e.preventDefault();
+        if (!currentUser) return;
+        try {
+            setGeneratingKey(true);
+            setApiKeyError('');
+            const token = await currentUser.getIdToken();
+            const res = await fetch('/api/v1/keys', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ name: newKeyName.trim() || 'API Key' })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || 'Failed to generate API key');
+            }
+            setGeneratedKeyResult(data);
+            setNewKeyName('');
+            fetchApiKeys();
+        } catch (err) {
+            console.error("Error creating API key:", err);
+            setApiKeyError(err.message);
+        } finally {
+            setGeneratingKey(false);
+        }
+    };
+
+    const handleRevokeKey = (keyId, keyName) => {
+        if (!currentUser) return;
+        setConfirmModal({
+            isOpen: true,
+            title: "Revoke API Key?",
+            message: `Are you sure you want to revoke key "${keyName}"? Any external applications or scripts using this key will immediately lose access.`,
+            confirmText: "Revoke Key",
+            onConfirm: async () => {
+                try {
+                    const token = await currentUser.getIdToken();
+                    const res = await fetch(`/api/v1/keys/${keyId}`, {
+                        method: 'DELETE',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (!res.ok) {
+                        const err = await res.json().catch(() => ({}));
+                        throw new Error(err.error || 'Failed to revoke key');
+                    }
+                    if (generatedKeyResult?.id === keyId) {
+                        setGeneratedKeyResult(null);
+                    }
+                    fetchApiKeys();
+                    if (window.setToast) window.setToast({ message: "API key revoked", type: "success" });
+                } catch (err) {
+                    console.error("Error revoking key:", err);
+                    if (window.setToast) window.setToast({ message: err.message, type: "error" });
+                }
+            }
+        });
+    };
+
     const onFileChange = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -204,7 +306,9 @@ const SettingsModal = ({ isOpen, onClose, theme, setTheme, saturation, setSatura
                      <button onClick={() => setActiveTab('smart')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'smart' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>Smart Features</button>
                      <button onClick={() => setActiveTab('tags')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'tags' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>Manage Tags</button>
                      <button onClick={() => setActiveTab('relationships')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'relationships' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>Relationships</button>
-                     <button onClick={() => setActiveTab('backup')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'backup' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>Backup & Export</button>                 </div>
+                     <button onClick={() => setActiveTab('backup')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'backup' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>Backup & Export</button>
+                     <button onClick={() => setActiveTab('api')} className={`flex-1 py-3 text-sm font-medium whitespace-nowrap px-6 transition-colors ${activeTab === 'api' ? 'text-slate-700 dark:text-slate-300 border-b-2 border-slate-700 dark:border-slate-400 bg-white dark:bg-gray-800' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}>API & Developer</button>
+                 </div>
                  <div className="p-6 overflow-y-auto flex-1 relative z-10 custom-scrollbar">
                      {activeTab === 'appearance' ? (
                          <div className="space-y-6">
@@ -862,7 +966,183 @@ const SettingsModal = ({ isOpen, onClose, theme, setTheme, saturation, setSatura
                                 }}
                              />
                          </div>
-                     ) : null}
+                      ) : activeTab === 'api' ? (
+                         <div className="space-y-6">
+                             {/* Banner / Info */}
+                             <div className="bg-slate-50 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                 <div>
+                                     <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                                         <Icons.Key size={16} className="text-slate-600 dark:text-slate-300" />
+                                         REST API & Developer Access
+                                     </h4>
+                                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                         Access and manage notes programmatically from iOS Shortcuts, Raycast, scripts, or home automations.
+                                     </p>
+                                 </div>
+                                 <a 
+                                     href="/api/v1/docs" 
+                                     target="_blank" 
+                                     rel="noreferrer" 
+                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-slate-700 dark:text-slate-300 shadow-sm transition-colors whitespace-nowrap self-start sm:self-auto"
+                                 >
+                                     <Icons.ExternalLink size={13} />
+                                     <span>API Docs</span>
+                                 </a>
+                             </div>
+
+                             {/* Base Endpoint URL */}
+                             <div className="p-4 bg-gray-50 dark:bg-gray-700/40 rounded-xl border border-gray-100 dark:border-gray-700">
+                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1.5">Base Endpoint URL</label>
+                                 <div className="flex items-center gap-2">
+                                     <div className="flex-1 font-mono text-xs bg-white dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 text-gray-800 dark:text-gray-200 overflow-x-auto select-all">
+                                         {typeof window !== 'undefined' ? window.location.origin : ''}/api/v1
+                                     </div>
+                                     <button 
+                                         onClick={() => {
+                                             if (typeof window !== 'undefined') {
+                                                 navigator.clipboard.writeText(`${window.location.origin}/api/v1`);
+                                                 setCopiedEndpoint(true);
+                                                 setTimeout(() => setCopiedEndpoint(false), 2000);
+                                             }
+                                         }} 
+                                         className="p-2 rounded-lg bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors shadow-sm"
+                                         title="Copy Base URL"
+                                     >
+                                         {copiedEndpoint ? <Icons.Check size={16} className="text-green-500" /> : <Icons.Copy size={16} />}
+                                     </button>
+                                 </div>
+                             </div>
+
+                             {/* Create New Key Section */}
+                             <div className="space-y-3">
+                                 <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Generate Personal API Key</h4>
+                                 <form onSubmit={handleCreateKey} className="flex gap-2">
+                                     <input 
+                                         type="text" 
+                                         placeholder="Key label (e.g. iOS Shortcuts, Backup Script)" 
+                                         value={newKeyName} 
+                                         onChange={(e) => setNewKeyName(e.target.value)} 
+                                         className="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-slate-500 outline-none dark:text-white"
+                                     />
+                                     <button 
+                                         type="submit" 
+                                         disabled={generatingKey || !currentUser} 
+                                         className="px-4 py-2 bg-slate-700 hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap shadow-sm"
+                                     >
+                                         {generatingKey ? <Icons.RefreshCw size={14} className="animate-spin" /> : <Icons.Plus size={14} />}
+                                         <span>Generate</span>
+                                     </button>
+                                 </form>
+                             </div>
+
+                             {/* Generated Key Reveal Modal / Banner */}
+                             {generatedKeyResult && (
+                                 <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-xl space-y-2">
+                                     <div className="flex items-center justify-between">
+                                         <div className="text-xs font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
+                                             <Icons.Check size={14} />
+                                             <span>Key Created: {generatedKeyResult.name}</span>
+                                         </div>
+                                         <button 
+                                             onClick={() => setGeneratedKeyResult(null)} 
+                                             className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-200 text-xs"
+                                         >
+                                             Done
+                                         </button>
+                                     </div>
+                                     <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                                         Copy your API key now. For security reasons, it will <strong>never</strong> be shown again!
+                                     </p>
+                                     <div className="flex items-center gap-2 pt-1">
+                                         <input 
+                                             type="text" 
+                                             readOnly 
+                                             value={generatedKeyResult.key} 
+                                             className="flex-1 font-mono text-xs bg-white dark:bg-gray-800 px-3 py-2 rounded-lg border border-emerald-300 dark:border-emerald-700 text-emerald-900 dark:text-emerald-200 select-all"
+                                         />
+                                         <button 
+                                             onClick={() => {
+                                                 navigator.clipboard.writeText(generatedKeyResult.key);
+                                                 setCopiedKey(true);
+                                                 setTimeout(() => setCopiedKey(false), 2000);
+                                             }} 
+                                             className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors"
+                                         >
+                                             {copiedKey ? <Icons.Check size={14} /> : <Icons.Copy size={14} />}
+                                             <span>{copiedKey ? "Copied!" : "Copy"}</span>
+                                         </button>
+                                     </div>
+                                 </div>
+                             )}
+
+                             {apiKeyError && (
+                                 <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg text-xs text-red-600 dark:text-red-300">
+                                     {apiKeyError}
+                                 </div>
+                             )}
+
+                             {/* Active Keys List */}
+                             <div className="space-y-3">
+                                 <div className="flex items-center justify-between">
+                                     <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Active Keys ({apiKeys.length})</h4>
+                                     <button 
+                                         onClick={fetchApiKeys} 
+                                         disabled={loadingKeys} 
+                                         className="p-1 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded" 
+                                         title="Refresh Keys"
+                                     >
+                                         <Icons.RefreshCw size={14} className={loadingKeys ? "animate-spin" : ""} />
+                                     </button>
+                                 </div>
+
+                                 {loadingKeys && apiKeys.length === 0 ? (
+                                     <div className="text-xs text-gray-400 italic text-center py-4">Loading API keys...</div>
+                                 ) : apiKeys.length === 0 ? (
+                                     <div className="p-4 rounded-xl border border-dashed border-gray-200 dark:border-gray-700 text-center text-xs text-gray-400 dark:text-gray-500">
+                                         No API keys active. Generate one above to access your notes via REST.
+                                     </div>
+                                 ) : (
+                                     <div className="space-y-2">
+                                         {apiKeys.map(k => (
+                                             <div key={k.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-100 dark:border-gray-600">
+                                                 <div className="min-w-0 pr-2">
+                                                     <div className="text-sm font-bold text-gray-900 dark:text-white truncate">{k.name}</div>
+                                                     <div className="flex items-center gap-2 text-[11px] text-gray-400 font-mono mt-0.5">
+                                                         <span>{k.prefix || 'keepit_sk_...'}</span>
+                                                         <span>•</span>
+                                                         <span>{k.createdAt ? new Date(k.createdAt).toLocaleDateString() : 'Active'}</span>
+                                                     </div>
+                                                 </div>
+                                                 <button 
+                                                     onClick={() => handleRevokeKey(k.id, k.name)} 
+                                                     className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors" 
+                                                     title="Revoke Key"
+                                                 >
+                                                     <Icons.Trash2 size={16} />
+                                                 </button>
+                                             </div>
+                                         ))}
+                                     </div>
+                                 )}
+                             </div>
+
+                             {/* Quick Example */}
+                             <div className="border-t border-gray-100 dark:border-gray-700 pt-4 space-y-2">
+                                 <h4 className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">cURL Example</h4>
+                                 <pre className="font-mono text-[11px] leading-relaxed p-3 bg-gray-900 text-gray-100 rounded-lg overflow-x-auto select-all">
+{`# 1. Fetch notes
+curl -H "X-API-Key: YOUR_KEY" \\
+  ${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.web.app'}/api/v1/notes
+
+# 2. Create note
+curl -X POST -H "X-API-Key: YOUR_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"Meeting Note","content":"Discussion items...","tags":["work"]}' \\
+  ${typeof window !== 'undefined' ? window.location.origin : 'https://your-app.web.app'}/api/v1/notes`}
+                                 </pre>
+                             </div>
+                         </div>
+                      ) : null}
                  </div>
              </div>
         </div>

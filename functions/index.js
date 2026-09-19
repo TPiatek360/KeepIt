@@ -3,19 +3,21 @@ const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { CloudTasksClient } = require("@google-cloud/tasks");
+const { createApiApp } = require("./api");
 
 setGlobalOptions({ maxInstances: 10 });
 
 admin.initializeApp();
 const tasksClient = new CloudTasksClient();
 
-// Queue location configuration
+// Configuration
+const APP_ID = process.env.APP_ID || "keepit-local";
 const PROJECT_ID = process.env.GCLOUD_PROJECT || (process.env.FIREBASE_CONFIG && JSON.parse(process.env.FIREBASE_CONFIG).projectId) || admin.app().options.projectId || "test-6826a";
 const LOCATION = "us-central1"; // Update to your Firebase Cloud Functions location
 const QUEUE_NAME = "reminder-queue";
 
 // 1. The Scheduler Function (Runs on Firestore Writes)
-exports.onNoteReminderWrite = onDocumentWritten("artifacts/keepit-local/users/{uid}/notes/{noteId}", async (event) => {
+exports.onNoteReminderWrite = onDocumentWritten(`artifacts/${APP_ID}/users/{uid}/notes/{noteId}`, async (event) => {
     const beforeData = event.data.before ? event.data.before.data() : null;
     const afterData = event.data.after ? event.data.after.data() : null;
 
@@ -79,7 +81,7 @@ exports.sendPushNotification = onRequest(async (req, res) => {
     const { uid, noteId, title } = req.body;
 
     // Query the user's active device tokens
-    const tokensSnap = await admin.firestore().collection(`artifacts/keepit-local/users/${uid}/fcm_tokens`).get();
+    const tokensSnap = await admin.firestore().collection(`artifacts/${APP_ID}/users/${uid}/fcm_tokens`).get();
     if (tokensSnap.empty) {
         res.status(200).send("No active devices registered for this user.");
         return;
@@ -106,3 +108,7 @@ exports.sendPushNotification = onRequest(async (req, res) => {
         res.status(500).send("Error sending notifications.");
     }
 });
+
+// 3. KeepIt REST API Endpoint
+const apiApp = createApiApp(admin, { APP_ID });
+exports.api = onRequest({ cors: true, maxInstances: 10 }, apiApp);

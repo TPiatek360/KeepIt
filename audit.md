@@ -110,6 +110,29 @@ The architecture leverages a single `contenteditable` host for unified inline ch
     - Implemented `safePersistHistory` with automatic LRU cleanup: if quota limits are approached, all stale `note_history_*` entries for inactive notes are purged and the payload is retried with reduced states.
     - Added automatic pruning of expired (> 24h) or unparseable history keys on note initialization.
 
+### Feature 10: KeepIt REST API & Personal Access Tokens (v1) (Implemented)
+- **Objective:** Enable external applications, automation tools, and scripts (such as iOS Shortcuts, Raycast, Obsidian, scripts, and home automation systems) to programmatically query, create, update, search, and manage notes and tags in KeepIt.
+- **Architecture & Implementation:**
+  - **Cloud Function REST API (`functions/api.js`):**
+    - Built an Express-based REST API hosted on Firebase Cloud Functions (`api`), served via Firebase Hosting rewrite `/api/**`.
+    - Endpoints:
+      - `GET /v1/notes` (supports query filters: `tag`, `search`, `pinned`, `archived`, `trashed`, `limit`).
+      - `GET /v1/notes/:id` (supports lookup by doc ID or 4-character `shortId`).
+      - `POST /v1/notes` (generates collision-resistant `shortId`, normalizes tags, sets timestamps).
+      - `PATCH /v1/notes/:id` (supports updating fields, `appendContent`, `addTags`, `removeTags`).
+      - `DELETE /v1/notes/:id` (soft-delete to trash by default, or permanent deletion with `?permanent=true`).
+      - `GET /v1/tags` (returns all unique tags).
+      - `GET /v1/me` (identity and authentication token status).
+      - `GET /v1/keys`, `POST /v1/keys`, `DELETE /v1/keys/:keyId` (Personal Access Token management).
+      - `GET /v1/docs` (interactive, responsive API documentation reference).
+  - **Authentication & Security:**
+    - Dual authentication support: Personal API Keys (`X-API-Key` or `Authorization: Bearer keepit_sk_...`) and Firebase Auth ID tokens (`Authorization: Bearer <jwt>`).
+    - API keys are hashed with SHA-256 before storage (`artifacts/${APP_ID}/api_keys/${hash}`). The raw secret key is never stored in Firestore and is displayed to the user only once upon creation.
+    - Parameterized namespace prefix `APP_ID = process.env.APP_ID || "keepit-local"`.
+  - **Settings UI (`public/js/components/modals.js`):**
+    - Added an "API & Developer" tab to the Settings Modal.
+    - Provides Base URL copy utility, API key generation with custom labels, one-time key reveal card, active keys list with revocation, and quick-start cURL examples.
+
 ---
 
 ## 3. High-Priority Findings & Recommended Fixes
