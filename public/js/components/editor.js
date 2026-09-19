@@ -135,16 +135,230 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
     const isDirtyRef = React.useRef(false);
     const lastKeystrokeRef = React.useRef(0);
     const loadedIdRef = React.useRef(null);
+    const activeIdRef = React.useRef(null);
     const { suggestTags, isAutoTaggingEnabled, extractTextFromImage, isOcrProcessing } = window.useSmart();
     const [isClosing, setIsClosing] = React.useState(false);
     const [isReady, setIsReady] = React.useState(false);
     const { currentNote } = window.useUI();
 
+    // Robust Caret Positioning: Ensures caret lands in an actual TextNode inside list item content
+    const setCaretInContent = (contentEl, atStart = true) => {
+        if (!contentEl) return;
+        const sel = window.getSelection();
+        if (!sel) return;
+
+        const walker = document.createTreeWalker(
+            contentEl,
+            window.NodeFilter?.SHOW_TEXT ?? 4,
+            {
+                acceptNode: (node) => {
+                    if (node.parentElement?.closest('[contenteditable="false"]')) {
+                        return window.NodeFilter?.FILTER_REJECT ?? 2;
+                    }
+                    return window.NodeFilter?.FILTER_ACCEPT ?? 1;
+                }
+            }
+        );
+
+        let targetNode = null;
+        let node;
+        if (atStart) {
+            targetNode = walker.nextNode();
+        } else {
+            while ((node = walker.nextNode())) {
+                targetNode = node;
+            }
+        }
+
+        if (!targetNode) {
+            targetNode = document.createTextNode('');
+            if (contentEl.firstChild) {
+                contentEl.insertBefore(targetNode, contentEl.firstChild);
+            } else {
+                contentEl.appendChild(targetNode);
+            }
+        }
+
+        const r = document.createRange();
+        const offset = atStart ? 0 : targetNode.length;
+        r.setStart(targetNode, offset);
+        r.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(r);
+    };
+
+    // Places caret reliably at the end of the editor (never behind checkboxes or in uneditable widgets)
+    const placeCaretAtEnd = (editorEl) => {
+        if (!editorEl) return;
+        editorEl.focus();
+
+        // 1. Check if the last list item is at the end of the editor
+        const listItems = editorEl.querySelectorAll('li.task-line, li.bullet-line');
+        if (listItems.length > 0) {
+            const lastLi = listItems[listItems.length - 1];
+            let isAtEnd = true;
+            let curr = lastLi;
+            while (curr && curr !== editorEl) {
+                let next = curr.nextSibling;
+                while (next) {
+                    if (next.textContent && next.textContent.trim().length > 0) {
+                        isAtEnd = false;
+                        break;
+                    }
+                    next = next.nextSibling;
+                }
+                if (!isAtEnd) break;
+                curr = curr.parentNode;
+            }
+
+            if (isAtEnd) {
+                const contentEl = lastLi.querySelector('.task-content, .bullet-content');
+                if (contentEl) {
+                    setCaretInContent(contentEl, false);
+                    return;
+                }
+            }
+        }
+
+        // 2. Find the last editable text node in the editor
+        const walker = document.createTreeWalker(
+            editorEl,
+            window.NodeFilter?.SHOW_TEXT ?? 4,
+            {
+                acceptNode: (node) => {
+                    if (node.parentElement?.closest('[contenteditable="false"]')) {
+                        return window.NodeFilter?.FILTER_REJECT ?? 2;
+                    }
+                    return window.NodeFilter?.FILTER_ACCEPT ?? 1;
+                }
+            }
+        );
+
+        let lastNode = null;
+        let n;
+        while ((n = walker.nextNode())) {
+            lastNode = n;
+        }
+
+        const sel = window.getSelection();
+        if (!sel) return;
+
+        if (lastNode) {
+            const li = lastNode.parentElement?.closest('li.task-line, li.bullet-line');
+            if (li) {
+                const contentEl = li.querySelector('.task-content, .bullet-content');
+                if (contentEl) {
+                    setCaretInContent(contentEl, false);
+                    return;
+                }
+            }
+            const range = document.createRange();
+            range.setStart(lastNode, lastNode.length);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } else {
+            const range = document.createRange();
+            range.selectNodeContents(editorEl);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    };
+
+    // Computes character offset within editable text nodes inside the editor
+    const getEditorCaretOffset = () => {
+        if (!editorRef.current) return null;
+        const sel = window.getSelection();
+        if (!sel || sel.rangeCount === 0) return null;
+        const range = sel.getRangeAt(0);
+        if (!editorRef.current.contains(range.startContainer)) return null;
+
+        let offset = 0;
+        const walker = document.createTreeWalker(
+            editorRef.current,
+            window.NodeFilter?.SHOW_TEXT ?? 4,
+            {
+                acceptNode: (node) => {
+                    if (node.parentElement?.closest('[contenteditable="false"]')) {
+                        return window.NodeFilter?.FILTER_REJECT ?? 2;
+                    }
+                    return window.NodeFilter?.FILTER_ACCEPT ?? 1;
+                }
+            }
+        );
+
+        let node;
+        while ((node = walker.nextNode())) {
+            if (node === range.startContainer) {
+                offset += Math.min(range.startOffset, node.length);
+                return offset;
+            }
+            try {
+                if (range.comparePoint(node, 0) < 0) {
+                    return offset;
+                }
+            } catch (e) {}
+            offset += node.length;
+        }
+        return offset;
+    };
+
+    // Restores caret to a specific character offset within editable text
+    const restoreEditorCaret = (offset) => {
+        if (!editorRef.current) return false;
+        if (typeof offset !== 'number' || offset < 0) return false;
+
+        const walker = document.createTreeWalker(
+            editorRef.current,
+            window.NodeFilter?.SHOW_TEXT ?? 4,
+            {
+                acceptNode: (node) => {
+                    if (node.parentElement?.closest('[contenteditable="false"]')) {
+                        return window.NodeFilter?.FILTER_REJECT ?? 2;
+                    }
+                    return window.NodeFilter?.FILTER_ACCEPT ?? 1;
+                }
+            }
+        );
+
+        let charCount = 0;
+        let node;
+
+        while ((node = walker.nextNode())) {
+            const nextCount = charCount + node.length;
+            if (offset <= nextCount) {
+                const nodeOffset = Math.max(0, Math.min(offset - charCount, node.length));
+
+                const listItem = node.parentElement?.closest('li.task-line, li.bullet-line');
+                if (listItem) {
+                    const contentEl = listItem.querySelector('.task-content, .bullet-content');
+                    if (contentEl && !contentEl.contains(node)) {
+                        setCaretInContent(contentEl, nodeOffset === 0);
+                        return true;
+                    }
+                }
+
+                const sel = window.getSelection();
+                if (!sel) return false;
+                const range = document.createRange();
+                range.setStart(node, nodeOffset);
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return true;
+            }
+            charCount = nextCount;
+        }
+
+        return false;
+    };
+
     // History for Undo/Redo
     const [history, setHistory] = React.useState([]);
     const [historyIndex, setHistoryIndex] = React.useState(-1);
 
-    const pushToHistory = (newState) => {
+    const pushToHistory = (newState = {}) => {
         setHistory(prev => {
             const currentSnapshot = { 
                 title: newState.title ?? title, 
@@ -152,6 +366,7 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                 tags: newState.tags ?? tags, 
                 color: newState.color ?? color,
                 html: editorRef.current?.innerHTML,
+                caretOffset: newState.caretOffset !== undefined ? newState.caretOffset : getEditorCaretOffset(),
                 timestamp: Date.now()
             };
             
@@ -175,19 +390,49 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         });
     };
 
+    const flushPendingHistory = () => {
+        if (!editorRef.current) return { history, index: historyIndex };
+        clearTimeout(window._historyDebounce);
+        const currentMarkdown = parseHtmlToMarkdown(editorRef.current);
+        const currentTitle = title;
+        const currentTop = history[historyIndex];
+
+        if (currentTop && (currentTop.content !== currentMarkdown || currentTop.title !== currentTitle)) {
+            const currentSnapshot = {
+                title: currentTitle,
+                content: currentMarkdown,
+                tags: [...tags],
+                color: color,
+                html: editorRef.current.innerHTML,
+                caretOffset: getEditorCaretOffset(),
+                timestamp: Date.now()
+            };
+            const newHistory = history.slice(0, historyIndex + 1);
+            newHistory.push(currentSnapshot);
+            if (newHistory.length > 50) newHistory.shift();
+            const newIdx = newHistory.length - 1;
+            setHistory(newHistory);
+            setHistoryIndex(newIdx);
+            return { history: newHistory, index: newIdx };
+        }
+        return { history, index: historyIndex };
+    };
+
     const handleUndo = (e) => {
-        if (historyIndex > 0) {
-            e.preventDefault();
-            const newIndex = historyIndex - 1;
-            const state = history[newIndex];
+        if (e && e.preventDefault) e.preventDefault();
+        const { history: activeHistory, index: activeIndex } = flushPendingHistory();
+        if (activeIndex > 0) {
+            const newIndex = activeIndex - 1;
+            const state = activeHistory[newIndex];
             setHistoryIndex(newIndex);
             applyHistoryState(state);
         }
     };
 
     const handleRedo = (e) => {
+        if (e && e.preventDefault) e.preventDefault();
+        clearTimeout(window._historyDebounce);
         if (historyIndex < history.length - 1) {
-            e.preventDefault();
             const newIndex = historyIndex + 1;
             const state = history[newIndex];
             setHistoryIndex(newIndex);
@@ -197,58 +442,37 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
 
     const applyHistoryState = (state) => {
         if (!state) return;
-        
-        // Save current selection offset if possible
-        const sel = window.getSelection();
-        let offset = 0;
-        if (sel.rangeCount > 0) {
-            const range = sel.getRangeAt(0);
-            const preRange = range.cloneRange();
-            preRange.selectNodeContents(editorRef.current);
-            preRange.setEnd(range.startContainer, range.startOffset);
-            offset = preRange.toString().length;
-        }
 
         setTitle(state.title);
         setContent(state.content);
-        setTags(state.tags);
-        setColor(state.color);
+        setTags(state.tags || []);
+        setColor(state.color || 'default');
         
-        if (editorRef.current && state.html !== undefined) {
-            editorRef.current.innerHTML = state.html;
+        if (editorRef.current) {
+            const htmlToApply = state.html !== undefined 
+                ? state.html 
+                : window.parseMarkdown(state.content || '', collapsedLines, !showCompleted);
+            editorRef.current.innerHTML = htmlToApply;
             
-            // Attempt to restore cursor
+            // Restore cursor:
+            // 1. Try recorded snapshot caretOffset
+            // 2. Fallback to placing caret at the end of the note (inside list item content if applicable)
             setTimeout(() => {
-                const newRange = document.createRange();
-                let charCount = 0;
-                let found = false;
-
-                const traverseNodes = (node) => {
-                    if (found) return;
-                    if (node.nodeType === 3) {
-                        const nextCount = charCount + node.length;
-                        if (offset <= nextCount) {
-                            newRange.setStart(node, offset - charCount);
-                            newRange.collapse(true);
-                            found = true;
-                        }
-                        charCount = nextCount;
-                    } else {
-                        for (let i = 0; i < node.childNodes.length; i++) traverseNodes(node.childNodes[i]);
-                    }
-                };
-
-                traverseNodes(editorRef.current);
-                if (found) {
-                    sel.removeAllRanges();
-                    sel.addRange(newRange);
+                if (!editorRef.current) return;
+                editorRef.current.focus();
+                
+                let restored = false;
+                if (typeof state.caretOffset === 'number' && state.caretOffset >= 0) {
+                    restored = restoreEditorCaret(state.caretOffset);
+                }
+                
+                if (!restored) {
+                    placeCaretAtEnd(editorRef.current);
                 }
             }, 0);
         }
         isDirtyRef.current = true;
     };
-
-    const activeIdRef = React.useRef(null);
 
     // Initialization & Cleanup
     React.useEffect(() => {
@@ -300,7 +524,7 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                 }
             }
 
-            const currentSnapshot = { title: initTitle, content: initContent, tags: [...initTags], color: initColor, html: parsedHtml, timestamp: Date.now() };
+            const currentSnapshot = { title: initTitle, content: initContent, tags: [...initTags], color: initColor, html: parsedHtml, caretOffset: null, timestamp: Date.now() };
 
             if (restoredHistory && restoredHistory.length > 0) {
                 // Check if latest history state is same as current to avoid duplication
@@ -437,33 +661,7 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         setLastSavedAt(liveNote.updatedAt?.seconds || Date.now() / 1000);
     };
 
-    // Robust Caret Positioning: Ensures caret lands in an actual TextNode inside list item content
-    const setCaretInContent = (contentEl, atStart = true) => {
-        if (!contentEl) return;
-        let textNode = null;
-        for (let i = 0; i < contentEl.childNodes.length; i++) {
-            const child = contentEl.childNodes[i];
-            if (child.nodeType === 3) {
-                textNode = child;
-                if (atStart) break;
-            }
-        }
-        if (!textNode) {
-            textNode = document.createTextNode('');
-            if (contentEl.firstChild) {
-                contentEl.insertBefore(textNode, contentEl.firstChild);
-            } else {
-                contentEl.appendChild(textNode);
-            }
-        }
-        const sel = window.getSelection();
-        const r = document.createRange();
-        const offset = atStart ? 0 : textNode.textContent.length;
-        r.setStart(textNode, offset);
-        r.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(r);
-    };
+
 
     // Enforce cursor position & track selections:
     // 1. Prevents cursor from landing on LI flex container or uneditable widgets (behind checkbox).
@@ -509,10 +707,13 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         const markdown = parseHtmlToMarkdown(editorRef.current);
         setContent(markdown);
 
+        // Capture current caret offset at time of keystroke
+        const currentOffset = getEditorCaretOffset();
+
         // Push to history with debounce
         clearTimeout(window._historyDebounce);
         window._historyDebounce = setTimeout(() => {
-            pushToHistory({ content: markdown });
+            pushToHistory({ content: markdown, caretOffset: currentOffset });
         }, 500);
     };
 
@@ -717,7 +918,11 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
         if (isEditorFocused && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
             e.preventDefault();
             e.stopPropagation();
-            handleUndo(e);
+            if (e.shiftKey) {
+                handleRedo(e);
+            } else {
+                handleUndo(e);
+            }
             return;
         }
         if (isEditorFocused && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {

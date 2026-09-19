@@ -42,6 +42,21 @@ The architecture leverages a single `contenteditable` host for unified inline ch
   - In [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js), the Web Worker is now instantiated once on mount (`[]`) and persists across the component lifetime, with latest viewport and layout callback references maintained via React refs.
   - Edge target note matching now tests `(n.id && n.id.toLowerCase() === targetId)` so full IDs resolve case-insensitively alongside short IDs.
 
+### Bug 4: Undo (Ctrl+Z) Caret Jump & Debounce Desynchronization (Resolved)
+- **Symptom:** After modifying a note, pressing `Ctrl+Z` caused the caret to jump to the very beginning of the note instead of near the edit or at the end. On checklist notes, the caret landed behind the checkbox of the first item at the top of the note or inside an uneditable handle.
+- **Root Cause:**
+  1. `applyHistoryState` previously attempted to compute an offset from the *current* DOM state (which had more characters if content was added). If `offset > charCount` of the restored snapshot, `found` was `false`, leaving the browser selection unset. The browser then defaulted to `(0, 0)` of the editor.
+  2. Because the first node was often `<li class="task-line">`, `enforceSelection` caught the selection at the root of that list item and repositioned it to the beginning of the first list item (or left it behind the checkbox).
+  3. Active typing changes within the 500ms debounce window were not flushed before undoing, causing `Ctrl+Z` to skip states or do nothing when `historyIndex === 0`.
+- **Fix Applied:**
+  - In [`public/js/components/editor.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/editor.js):
+    - Added `getEditorCaretOffset()` and `restoreEditorCaret(offset)` using a `TreeWalker` that strictly measures editable text nodes and filters out non-editable handles/checkboxes/buttons.
+    - Added `placeCaretAtEnd(editorEl)` to reliably anchor the caret at the end of the note (inside `.task-content` or `.bullet-content` if the note ends with a list item).
+    - Updated `pushToHistory` to record `caretOffset` with each snapshot.
+    - Updated `applyHistoryState` to attempt restoration using `state.caretOffset`, with automatic fallback to `placeCaretAtEnd()`.
+    - Implemented `flushPendingHistory()` on `handleUndo` and `handleRedo` to capture uncommitted keystrokes within the debounce window before undoing.
+    - Added `Ctrl+Shift+Z` support alongside `Ctrl+Y` for Redo.
+
 ---
 
 ## 3. High-Priority Findings & Recommended Fixes
