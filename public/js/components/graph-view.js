@@ -9,6 +9,9 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
     const [mousePos, setMousePos] = React.useState({ x: 0, y: 0 });
     const [selectedRelType, setSelectedRelType] = React.useState(relationshipTypes[0]?.id || 'related');
     const [isSnapEnabled, setIsSnapEnabled] = React.useState(false);
+    const [showEdgeLabels, setShowEdgeLabels] = React.useState(() => {
+        try { return localStorage.getItem('graph_show_edge_labels') !== 'false'; } catch (_) { return true; }
+    });
     const [selectedEdge, setSelectedEdge] = React.useState(null); 
     const [showArchived, setShowArchived] = React.useState(false);
     const [isOrganizing, setIsOrganizing] = React.useState(false);
@@ -17,6 +20,22 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
     const [selectedNodeIds, setSelectedNodeIds] = React.useState(new Set());
     const [selectionBox, setSelectionBox] = React.useState(null);
     const [dropTargetId, setDropTargetId] = React.useState(null);
+
+    const toggleEdgeLabels = () => {
+        setShowEdgeLabels(prev => {
+            const next = !prev;
+            try { localStorage.setItem('graph_show_edge_labels', String(next)); } catch (_) {}
+            return next;
+        });
+    };
+
+    const getEdgeLabel = React.useCallback((rel) => {
+        if (rel.type === 'tagged') return null;
+        if (rel.type === 'link') return 'link';
+        if (rel.type === 'parent') return 'child of';
+        const match = relationshipTypes.find(r => r.id === rel.type);
+        return match ? match.forward : rel.type;
+    }, [relationshipTypes]);
     
     const canvasRef = React.useRef(null);
     const workerRef = React.useRef(null);
@@ -747,6 +766,7 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
         <div className="flex flex-col h-full w-full overflow-hidden bg-gray-900 relative select-none" onContextMenu={(e) => e.preventDefault()}>
             <div className="absolute top-4 left-4 z-50 flex gap-2 bg-gray-800/90 backdrop-blur p-2 rounded-xl shadow-xl border border-gray-700 items-center">
                 <button onClick={() => setIsSnapEnabled(!isSnapEnabled)} className={`p-1.5 rounded-lg border transition-colors ${isSnapEnabled ? 'bg-slate-500/20 text-slate-400 border-slate-500/50' : 'text-gray-400 border-transparent hover:bg-gray-700'}`} title="Toggle Snap to Grid"><Icons.Grid size={18} /></button>
+                <button onClick={toggleEdgeLabels} className={`p-1.5 rounded-lg border transition-colors ${showEdgeLabels ? 'bg-slate-500/20 text-slate-300 border-slate-500/50' : 'text-gray-400 border-transparent hover:bg-gray-700'}`} title={showEdgeLabels ? "Hide Relationship Labels" : "Show Relationship Labels"}><Icons.Tag size={18} /></button>
                 <div className="h-6 w-px bg-gray-700 mx-1"></div>
                 <select value={selectedRelType} onChange={e => setSelectedRelType(e.target.value)} className="bg-gray-900 text-white text-sm px-3 py-1 rounded-lg border border-gray-600 outline-none focus:border-slate-500">{relationshipTypes.map(r => <option key={r.id} value={r.id}>{r.forward}</option>)}</select>
                 <div className="h-6 w-px bg-gray-700 mx-1"></div>
@@ -802,7 +822,54 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
                             const cx = Math.pow(1-t, 3)*sx + 3*Math.pow(1-t, 2)*t*cp1x + 3*(1-t)*Math.pow(t, 2)*cp2x + Math.pow(t, 3)*tx;
                             const cy = Math.pow(1-t, 3)*sy + 3*Math.pow(1-t, 2)*t*sy + 3*(1-t)*Math.pow(t, 2)*ty + Math.pow(t, 3)*ty;
                             const d = `M ${sx} ${sy} C ${cp1x} ${sy}, ${cp2x} ${ty}, ${tx} ${ty}`;
-                            return ( <g key={`${rel.source}-${rel.target}-${i}`}><path d={d} stroke={rel.color || '#64748b'} strokeWidth="2" strokeDasharray={rel.dashed ? "5,5" : "0"} fill="none" markerEnd="url(#arrowhead)" opacity="0.6" /><path d={d} stroke="transparent" strokeWidth="20" fill="none" className="cursor-pointer" pointerEvents="stroke" onClick={(e) => handleEdgeClick(e, rel, cx, cy)} ><title>Click to edit link</title></path></g> );
+
+                            const labelText = getEdgeLabel(rel);
+                            const shouldShowLabel = showEdgeLabels && scale >= 0.35;
+                            const nodeDist = Math.hypot(tx - sx, ty - sy);
+                            const labelWidth = labelText ? Math.max(34, labelText.length * 6.2 + 16) : 0;
+
+                            return ( 
+                                <g key={`${rel.source}-${rel.target}-${i}`}>
+                                    <path d={d} stroke={rel.color || '#64748b'} strokeWidth="2" strokeDasharray={rel.dashed ? "5,5" : "0"} fill="none" markerEnd="url(#arrowhead)" opacity="0.6" />
+                                    <path d={d} stroke="transparent" strokeWidth="20" fill="none" className="cursor-pointer" pointerEvents="stroke" onClick={(e) => handleEdgeClick(e, rel, cx, cy)} >
+                                        <title>Click to edit link</title>
+                                    </path>
+                                    {shouldShowLabel && labelText && nodeDist >= 70 && (
+                                        <g 
+                                            transform={`translate(${cx}, ${cy})`} 
+                                            style={{ pointerEvents: 'auto' }}
+                                            className="cursor-pointer group/edge-label transition-transform hover:scale-110" 
+                                            onClick={(e) => handleEdgeClick(e, rel, cx, cy)}
+                                        >
+                                            <title>Click to edit relationship: {labelText}</title>
+                                            <rect 
+                                                x={-labelWidth / 2} 
+                                                y={-9} 
+                                                width={labelWidth} 
+                                                height={18} 
+                                                rx={9} 
+                                                ry={9} 
+                                                fill="#0f172a" 
+                                                stroke={rel.color || '#64748b'} 
+                                                strokeWidth="1.2" 
+                                                className="filter drop-shadow-sm transition-colors group-hover/edge-label:stroke-slate-300"
+                                            />
+                                            <text 
+                                                x={0} 
+                                                y={3.5} 
+                                                textAnchor="middle" 
+                                                fill={rel.type === 'link' ? '#38bdf8' : '#e2e8f0'} 
+                                                fontSize="9.5" 
+                                                fontWeight="600" 
+                                                fontFamily="ui-sans-serif, system-ui, sans-serif"
+                                                className="select-none pointer-events-none"
+                                            >
+                                                {labelText}
+                                            </text>
+                                        </g>
+                                    )}
+                                </g> 
+                            );
                         })}
                         {connectingNode && ( <path d={`M ${connectingNode.x + (connectingNode.nodeType === 'tag' ? 50 : 100)} ${connectingNode.y + (connectingNode.nodeType === 'tag' ? 15 : 30)} L ${mousePos.x} ${mousePos.y}`} stroke="#f59e0b" strokeWidth="2" strokeDasharray="5,5" fill="none" /> )}
                     </svg>

@@ -373,6 +373,59 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
     const [history, setHistory] = React.useState([]);
     const [historyIndex, setHistoryIndex] = React.useState(-1);
 
+    // Helper to sanitize history for localStorage (stripping heavy base64 strings & excessive payload)
+    const sanitizeHistoryForStorage = (historyArray) => {
+        return (historyArray || []).slice(-30).map(s => {
+            let sanitizedHtml = s.html;
+            if (sanitizedHtml && sanitizedHtml.includes('data:image/')) {
+                sanitizedHtml = sanitizedHtml.replace(/src="data:image\/[^"]+"/g, 'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" data-placeholder="image"');
+            }
+            if (sanitizedHtml && sanitizedHtml.length > 40000) {
+                sanitizedHtml = undefined;
+            }
+            return {
+                title: s.title,
+                content: s.content,
+                tags: s.tags,
+                color: s.color,
+                html: sanitizedHtml,
+                caretOffset: s.caretOffset,
+                timestamp: s.timestamp
+            };
+        });
+    };
+
+    // Safe persistence with automatic quota management & eviction
+    const safePersistHistory = (noteId, historyArray) => {
+        if (!noteId || noteId === 'new-note') return;
+        const key = `note_history_${noteId}`;
+        const sanitized = sanitizeHistoryForStorage(historyArray);
+        try {
+            localStorage.setItem(key, JSON.stringify(sanitized));
+        } catch (e) {
+            console.warn(`[Editor] LocalStorage quota reached when saving history for ${noteId}. Pruning old history entries...`);
+            try {
+                // Collect and remove all old note_history_* keys except active note
+                const historyKeys = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('note_history_') && k !== key) {
+                        historyKeys.push(k);
+                    }
+                }
+                historyKeys.forEach(k => {
+                    try { localStorage.removeItem(k); } catch (_) {}
+                });
+
+                // Retry with reduced states (latest 10)
+                const emergencySanitized = sanitized.slice(-10);
+                localStorage.setItem(key, JSON.stringify(emergencySanitized));
+            } catch (e2) {
+                console.warn("[Editor] Could not persist history to localStorage even after pruning:", e2);
+            }
+        }
+    };
+
     const pushToHistory = (newState = {}) => {
         setHistory(prev => {
             const currentSnapshot = { 
@@ -391,13 +444,11 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
 
             const newHistory = prev.slice(0, historyIndex + 1);
             newHistory.push(currentSnapshot);
-            if (newHistory.length > 50) newHistory.shift(); // Max 50 states
+            if (newHistory.length > 50) newHistory.shift(); // Max 50 states in memory
             
-            // ✅ PERSIST HISTORY: Save to localStorage for cross-session undo
+            // ✅ PERSIST HISTORY: Safe persistence with quota protection & media stripping
             if (activeIdRef.current && activeIdRef.current !== 'new-note') {
-                try {
-                    localStorage.setItem(`note_history_${activeIdRef.current}`, JSON.stringify(newHistory));
-                } catch (e) { console.warn("Failed to persist history to localStorage:", e); }
+                safePersistHistory(activeIdRef.current, newHistory);
             }
 
             setHistoryIndex(newHistory.length - 1);
@@ -428,6 +479,9 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
             const newIdx = newHistory.length - 1;
             setHistory(newHistory);
             setHistoryIndex(newIdx);
+            if (activeIdRef.current && activeIdRef.current !== 'new-note') {
+                safePersistHistory(activeIdRef.current, newHistory);
+            }
             return { history: newHistory, index: newIdx };
         }
         return { history, index: historyIndex };
@@ -535,7 +589,13 @@ const NoteEditor = ({ isOpen, onClose, initialNote, liveNote, onSave, onDelete, 
                         const parsed = JSON.parse(storedRaw);
                         const twentyFourHoursAgo = Date.now() - 86400000;
                         restoredHistory = parsed.filter(state => state.timestamp > twentyFourHoursAgo);
-                    } catch (e) { console.warn("Failed to parse stored history:", e); }
+                        if (!restoredHistory.length) {
+                            try { localStorage.removeItem(`note_history_${incomingId}`); } catch (_) {}
+                        }
+                    } catch (e) { 
+                        console.warn("Failed to parse stored history:", e); 
+                        try { localStorage.removeItem(`note_history_${incomingId}`); } catch (_) {}
+                    }
                 }
             }
 

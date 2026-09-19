@@ -92,6 +92,24 @@ The architecture leverages a single `contenteditable` host for unified inline ch
       - Settles the dragged node smoothly next to the target node without overlap.
     - Added a 4px drag threshold to differentiate taps/clicks from actual drags, eliminating accidental node position shifts on selection taps.
 
+### Bug 8: Unlabeled Graph Relationship Edges (Resolved)
+- **Symptom:** Custom note-to-note links (*"Related to"*, *"Expands"*, *"Causes"*, *"Prevents"*, *"Explains"*) and internal links appeared as uniform solid or dashed lines. Users could not determine the type of relationship between notes without individually clicking each edge line.
+- **Fix Applied:**
+  - In [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js):
+    - Added `showEdgeLabels` state (persisted in `localStorage`) and a toolbar toggle button (`<Icons.Tag size={18} />`).
+    - Added `getEdgeLabel(rel)` resolving forward relationship names for custom note relations, `"link"` for internal markdown links, and `"child of"` for tag hierarchies.
+    - Rendered interactive SVG pill badges at the cubic bezier midpoint `(cx, cy)` of connection curves with theme-aware styling and color-matched borders.
+    - Clicking the pill directly triggers `handleEdgeClick` to edit or delete the link.
+    - Included zoom-distance thresholding (`scale >= 0.35` and node distance >= 70px) to prevent badge crowding when zoomed far out.
+
+### Bug 9: History Stack & LocalStorage Quota Overflow (Resolved)
+- **Symptom:** On notes with embedded base64 screenshots, drawing canvas sketches, or extensive task lists, saving up to 50 raw HTML snapshots to `localStorage` caused `QuotaExceededError` crashes and blocked settings/draft saves. Additionally, historical keys for inactive notes accumulated indefinitely.
+- **Fix Applied:**
+  - In [`public/js/components/editor.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/editor.js):
+    - Implemented `sanitizeHistoryForStorage` to strip heavy base64 `data:image/...` strings from persisted HTML states, capping storage history to the latest 30 snapshots and omitting bloated HTML strings over 40KB in favor of pure markdown content.
+    - Implemented `safePersistHistory` with automatic LRU cleanup: if quota limits are approached, all stale `note_history_*` entries for inactive notes are purged and the payload is retried with reduced states.
+    - Added automatic pruning of expired (> 24h) or unparseable history keys on note initialization.
+
 ---
 
 ## 3. High-Priority Findings & Recommended Fixes
@@ -123,15 +141,6 @@ The architecture leverages a single `contenteditable` host for unified inline ch
 - **Location:** [`public/js/contexts.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/contexts.js)
 - **Issue:** Several critical asynchronous operations (such as IndexedDB access, tag updates, and cache hydration) use empty `catch (err) {}` or generic `console.warn` blocks without surfacing feedback to the UI or logging diagnostic details.
 - **Recommendation:** Connect error handlers to the application toast notification system (`setToast({ message: '...', type: 'error' })`) and log structured errors for easier debugging.
-
----
-
-### 5. Undo/Redo Memory Overhead
-- **Location:** [`public/js/components/editor.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/editor.js#L143-L155)
-- **Issue:** The editor saves a complete snapshot of the document's `innerHTML`, `content`, and metadata on every debounced keystroke, persisting up to 50 snapshots in React state and in `localStorage` under `note_history_${incomingId}`. For large notes with embedded base64 images or extensive task lists, this can exceed `localStorage` quotas (typically 5MB).
-- **Recommendation:**
-  - Store only markdown text diffs or pure markdown strings rather than full `innerHTML` trees.
-  - Strip large media strings (data URLs) from history snapshots.
 
 ---
 
