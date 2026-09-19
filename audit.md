@@ -2,7 +2,7 @@
 
 **Date:** September 18, 2026  
 **Repository:** [KeepIt](https://github.com/TPiatek360/KeepIt.git)  
-**Version:** v2.1.0+  
+**Version:** v2.1.1  
 
 ---
 
