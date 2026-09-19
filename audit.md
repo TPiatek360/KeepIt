@@ -36,25 +36,15 @@ The architecture leverages a single `contenteditable` host for unified inline ch
   - In `onSubmit`, if text was highlighted, preserve that text as the anchor text: `<a href="${finalUrl}" class="internal-link">${finalText}</a>`.
   - Updated `window.processInlineFormatting` in `utils.js` to assign `class="internal-link"` to any `[text](internal://id)` link so internal links with custom labels retain full preview and navigation capabilities.
 
+### Bug 3: Graph View Worker Churn & Edge Case-Insensitivity (Resolved)
+- **Symptom:** During graph panning or wheel-zooming, Web Workers were being continuously created and terminated at 60 FPS. Also, internal links targeting full 20-char mixed-case Firestore IDs failed to connect edges.
+- **Fix Applied:**
+  - In [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js), the Web Worker is now instantiated once on mount (`[]`) and persists across the component lifetime, with latest viewport and layout callback references maintained via React refs.
+  - Edge target note matching now tests `(n.id && n.id.toLowerCase() === targetId)` so full IDs resolve case-insensitively alongside short IDs.
+
 ---
 
 ## 3. High-Priority Findings & Recommended Fixes
-
-### 1. Graph View Worker Churn (Performance Bottleneck)
-- **Location:** [`public/js/components/graph-view.js`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/js/components/graph-view.js#L26-L47)
-- **Issue:** 
-  ```javascript
-  React.useEffect(() => {
-      workerRef.current = new Worker('js/graph-worker.js');
-      ...
-      return () => workerRef.current.terminate();
-  }, [pan.x, pan.y, scale, onBatchSaveLayout, isSnapEnabled]);
-  ```
-  The dependency array includes `pan.x`, `pan.y`, and `scale`. During canvas drag or scroll-zoom operations, `pan` changes up to 60 times per second. Every single frame terminates the active Web Worker thread and spawns a new Web Worker instance from disk/cache.
-- **Risk:** High CPU utilization, UI stuttering, and potential memory spikes during graph navigation.
-- **Recommendation:** Keep the worker instance persistent across the component lifetime (`[]` dependency array) and communicate viewport updates via `workerRef.current.postMessage(...)` or use refs for state access inside callbacks.
-
----
 
 ### 2. Runtime In-Browser Babel Compilation (`@babel/standalone`)
 - **Location:** [`public/index.html`](file:///C:/Users/TPiatek360/OneDrive/Documents/Web%20Pages/Note%20App/public/index.html#L46-L79)

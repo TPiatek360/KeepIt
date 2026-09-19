@@ -23,27 +23,57 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
     const TAG_PREFIX = 'TAG__';
     const GRID_SIZE = 20;
 
-    // Initialize Worker
+    // Keep live refs to avoid recreating the Worker on pan/zoom/snap changes
+    const panRef = React.useRef(pan);
+    const scaleRef = React.useRef(scale);
+    const isSnapEnabledRef = React.useRef(isSnapEnabled);
+    const onBatchSaveLayoutRef = React.useRef(onBatchSaveLayout);
+
+    panRef.current = pan;
+    scaleRef.current = scale;
+    isSnapEnabledRef.current = isSnapEnabled;
+    onBatchSaveLayoutRef.current = onBatchSaveLayout;
+
+    // Initialize Worker once on mount
     React.useEffect(() => {
-        workerRef.current = new Worker('js/graph-worker.js');
-        workerRef.current.onmessage = (e) => {
-            const { updates } = e.data;
-            
-            // Phase 3: Add a settling delay before snapping
-            setTimeout(() => {
-                if (onBatchSaveLayout) {
-                    const snappedUpdates = updates.map(u => ({
-                        ...u,
-                        x: isSnapEnabled ? Math.round(u.x / GRID_SIZE) * GRID_SIZE : u.x,
-                        y: isSnapEnabled ? Math.round(u.y / GRID_SIZE) * GRID_SIZE : u.y
-                    }));
-                    onBatchSaveLayout(snappedUpdates, { x: pan.x, y: pan.y, scale });
-                }
+        try {
+            workerRef.current = new Worker('js/graph-worker.js');
+            workerRef.current.onmessage = (e) => {
+                const { updates } = e.data;
+                
+                // Add a settling delay before snapping
+                setTimeout(() => {
+                    if (onBatchSaveLayoutRef.current) {
+                        const currentSnap = isSnapEnabledRef.current;
+                        const snappedUpdates = updates.map(u => ({
+                            ...u,
+                            x: currentSnap ? Math.round(u.x / GRID_SIZE) * GRID_SIZE : u.x,
+                            y: currentSnap ? Math.round(u.y / GRID_SIZE) * GRID_SIZE : u.y
+                        }));
+                        onBatchSaveLayoutRef.current(snappedUpdates, { 
+                            x: panRef.current.x, 
+                            y: panRef.current.y, 
+                            scale: scaleRef.current 
+                        });
+                    }
+                    setIsOrganizing(false);
+                }, 150);
+            };
+            workerRef.current.onerror = (err) => {
+                console.error('[GraphView] Worker error:', err);
                 setIsOrganizing(false);
-            }, 150);
+            };
+        } catch (err) {
+            console.error('[GraphView] Failed to initialize Worker:', err);
+        }
+
+        return () => {
+            if (workerRef.current) {
+                workerRef.current.terminate();
+                workerRef.current = null;
+            }
         };
-        return () => workerRef.current.terminate();
-    }, [pan.x, pan.y, scale, onBatchSaveLayout, isSnapEnabled]);
+    }, []);
 
     React.useEffect(() => {
         const canvasEl = canvasRef.current;
@@ -157,7 +187,7 @@ const GraphView = ({ notes, tags, tagParents, tagLayout, savedViewport, snapshot
             linkRegex.lastIndex = 0;
             while ((match = linkRegex.exec(content)) !== null) {
                 const targetId = match[1].toLowerCase();
-                const target = displayNotes.find(n => (n.shortId && n.shortId.toLowerCase() === targetId) || n.id === targetId);
+                const target = displayNotes.find(n => (n.shortId && n.shortId.toLowerCase() === targetId) || (n.id && n.id.toLowerCase() === targetId));
                 if (target && target.id !== note.id) {
                     addEdge(note.id, target.id, 'link', '#38bdf8', true);
                 }
