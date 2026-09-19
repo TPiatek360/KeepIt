@@ -1,0 +1,62 @@
+This is a classic **state race condition** between immediate local UI updates and asynchronous Firestore synchronization. Here's exactly what's happening and how to fix it.
+
+### 🔍 Root Cause Analysis
+
+1. **The Save Flow**: When you save a note, `handleSaveNote` in `contexts.js` **instantly** updates `UIContext.currentNote` with the new content and timestamp for UI responsiveness. It then pushes to Firestore.
+2. **The Sync Delay**: Firestore's `onSnapshot` listener takes a moment to reflect the change back into the `notes` list (`ownedNotes`).
+3. **The Stale Overwrite**: When you close the modal and reopen it, `cardProps.onEdit` is triggered. It receives the `note` object from your rendered list (`filteredNotes`), which is **still stale** because Firestore hasn't synced yet. It then calls `setCurrentNote(staleNote)`, overwriting the fresh version in `UIContext`.
+4. **The Phantom Conflict**: The `NoteEditor` initializes with the stale data. When Firestore finally pushes the fresh update, the conflict detector compares the stale local state against the fresh server state, sees a difference, and triggers a **false positive sync conflict**. Choosing "Overwrite" just saves the stale state again, trapping you in a loop until the snapshot fully propagates.
+
+### 🛠️ The Fix
+
+You need to change `app.js` so that when opening a note, it prioritizes the already-updated `UIContext.currentNote` (if it matches the ID) instead of blindly overwriting it with a potentially stale list item.
+
+**In `app.js`, locate the `MainContent` component and find the `cardProps` definition.** Replace the `onEdit` handler with this:
+
+```javascript
+// app.js -> inside MainContent component
+const cardProps = {
+    // ... other props
+    onEdit: (note) => { 
+        if(note.tags?.some(t => lockedTags.includes(t)) && !isSessionUnlocked) {
+            unlockSession(); 
+        } else { 
+            // ✅ FIX: Prevent stale data overwrite by checking UI context first
+            const latestNote = currentNote?.id === note.id 
+                ? currentNote 
+                : notes.find(n => n.id === note.id) || note;
+                
+            handleViewNote(note.id); 
+            setNoteHistory([]); 
+            setCurrentNote(latestNote); // Use the freshest version
+            setIsEditorOpen(true); 
+        } 
+    },
+    // ... rest of props
+};
+```
+
+### 💡 Why This Works
+- If you just saved and reopened the note before Firestore synced, `currentNote?.id === note.id` is true, so it reuses the **freshly saved version** already in `UIContext`.
+- If you open a completely different note, it safely falls back to the `notes` list.
+- This breaks the stale-initialization loop, so the conflict detector will see `localContent === serverContent` and remain silent.
+
+### 🔧 Secondary Fix: Graph View (Optional)
+If you use the Graph View heavily, it has the exact same pattern in `graph-view.js`:
+```javascript
+// graph-view.js -> line ~285
+onEdit={(n) => { handleViewNote(n.id); setNoteHistory([]); setCurrentNote(n); setIsEditorOpen(true); }}
+```
+If you experience the bug there, change it to:
+```javascript
+onEdit={(n) => { 
+    const latest = window.useUI?.().currentNote?.id === n.id ? window.useUI().currentNote : notes.find(x => x.id === n.id) || n;
+    handleViewNote(n.id); 
+    setNoteHistory([]); 
+    setCurrentNote(latest); 
+    setIsEditorOpen(true); 
+}}
+```
+*(Note: `GraphView` doesn't directly import `useUI` in your current structure, so passing `setCurrentNote` and `currentNote` down as props to `GraphView` from `app.js` would be cleaner, but the list-view fix will solve 99% of your daily workflow issues.)*
+
+Apply the `app.js` patch, clear your browser cache/localStorage for the app, and test. The edits should persist instantly across reopens, and the phantom sync warnings will disappear.

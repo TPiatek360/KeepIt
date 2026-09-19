@@ -1,0 +1,66 @@
+Fetching a webpage title automatically requires a **back-end script** or a **serverless function**. You can't do this with basic client-side JavaScript alone because of **CORS (Cross-Origin Resource Sharing)**—security rules that prevent your browser from "snooping" on other websites directly.
+
+Here is the breakdown of how to build a "Link Previewer" or "Auto-Titler."
+
+---
+
+### 1. The Workflow
+
+Since your browser can't fetch the title directly, you need a "middleman" (a server) to go grab the data for you.
+
+1. **Input:** You provide a URL (e.g., `youtube.com/watch?v=123`).
+2. **Request:** Your frontend sends that URL to your server API.
+3. **Fetch:** Your server visits the site, downloads the HTML, and parses the `<title>` tag.
+4. **Response:** The server sends the text back to your frontend.
+5. **Display:** Your JavaScript updates the `<a>` tag’s text.
+
+---
+
+### 2. Handling Regular Websites (Node.js Example)
+
+If you are using Node.js, libraries like `axios` (to fetch) and `cheerio` (to parse HTML) make this easy.
+
+```javascript
+// A simple Express.js route
+app.get('/get-title', async (req, res) => {
+    const url = req.query.url;
+    const { data } = await axios.get(url);
+    const $ = cheerio.load(data);
+    const title = $('title').text();
+    res.json({ title });
+});
+
+```
+
+---
+
+### 3. Handling YouTube (The Special Case)
+
+YouTube and other social media sites are tricky because they often use JavaScript to load content. A standard HTML fetch might just return "YouTube" instead of the video name.
+
+To get the actual video title, you have two better options:
+
+* **oEmbed (Recommended):** Most big sites support this. You hit an endpoint like `https://www.youtube.com/oembed?url=[VIDEO_URL]&format=json` and it returns a neat JSON package with the `title`, `author`, and `thumbnail`.
+* **Open Graph Tags:** Many sites use `<meta property="og:title" content="...">`. Your server should look for these tags first, as they are specifically designed for link sharing.
+
+---
+
+### 4. Low-Code Alternatives
+
+If you don't want to build your own server, you can use **Link Preview APIs**. These services handle the proxying, caching, and parsing for you.
+
+| Service | Best For |
+| --- | --- |
+| **LinkPreview.net** | Simple, fast JSON returns of titles/images. |
+| **Microlink.io** | Heavy-duty data extraction and screenshots. |
+| **Iframely** | Best for embedding YouTube/Twitter cards specifically. |
+
+---
+
+### 5. Implementation Strategy
+
+If you're building this yourself, I'd suggest creating a small **Next.js API route** or a **Cloudflare Worker**. These are "serverless," meaning they only run when someone inputs a link, keeping your costs at zero for low-volume projects.
+
+> **Pro Tip:** Always implement a "fallback." If the server fails to find a title within 2 seconds, just display the raw URL so the user isn't staring at a blank space.
+
+Would you like me to write a specific code snippet for a frontend fetch function or a backend Node.js script to get you started?

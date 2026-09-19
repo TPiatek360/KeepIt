@@ -1,0 +1,102 @@
+# Unified Roadmap & Improvement Plan for KeepIt Pro
+
+## ✅ Recently Completed (P0 & P1)
+- [DONE] **Hierarchical Task Preservation**: Re-engineered task separation logic to treat nested lists as unified blocks. Checking a parent moves the entire tree to the completed section; checking a child keeps it in place under its parent. Prevents data corruption and structure loss.
+- [DONE] **Global Visual Overhaul (Slate Theme)**: Replaced "garish" bright blue elements project-wide with a professional slate/dark-blue-grey palette. Updated FAB, buttons, toggles, settings, and internal color systems for a unified, non-jarring aesthetic in both light and dark modes.
+- [DONE] **Enhanced Graph View Rendering**: Graph nodes now render fully formatted HTML (checklists, bold/italic) using a new `prose-mini` compact style.
+- [DONE] **Hardened Import Engine**: Implemented chunked batching (450 notes per batch) to bypass Firestore's hard limits and added `shortId` uniqueness verification to prevent ambiguous internal links.
+- [DONE] **Editor Logic Overhaul**: Fixed critical "Disappearing Text" bug by improving `<br>` and `<div>` newline parsing; added a "Sanity Check" fallback to prevent data loss.
+- [DONE] **Custom Undo/Redo System**: Built a 50-snapshot history stack that persists through manual DOM updates and sync operations, fully restoring `Ctrl+Z`/`Ctrl+Y`.
+- [DONE] **Mobile UX Fixes**: Made list deletion buttons permanently visible on touch devices (50% opacity) to solve the "hover-only" accessibility barrier.
+- [DONE] **Sketch Compression**: Optimized the Drawing Modal to save sketches as compressed JPEGs with white backgrounds, preventing 1MB Firestore document crashes.
+- [DONE] **Organizational Hygiene**: Implemented automatic scrubbing of deleted tags from `pinnedTags`, `lockedTags`, and `excludedTags` arrays.
+- [DONE] **Search & Privacy Logic**: Refined search filters to strictly exclude "Hidden" tags from results unless specifically selected in the sidebar.
+- [DONE] **Graph View Stability**: Added a 150ms settling delay after "Auto-Organize" to prevent jarring snaps and improved node collision avoidance via spiral searching.
+- [DONE] **Backup Inspector Tool**: Created `backup_inspector.html` for instant, read-only data extraction and copy-pasting from JSON backups.
+- [DONE] **Pinned Priority Rule**: Established that pinned tags always remain visible in the shortcuts section, even if they are "hidden" from the main tree.
+- [DONE] **Fix "State Leakage"**: Ensured the editor fully resets `isDirty` and `lastKeystroke` timers when switching between different note IDs.
+- [DONE] **Card Overview Optimization**: Grid cards now show a concise "X Completed Items" count instead of the full list to save screen real estate.
+- [DONE] **Fix Editor "Popping"**: Implemented a 10-second typing lock and improved focus detection (`contains`) to stop background sync from resetting cursor position.
+- [DONE] **Advanced Sidebar Navigation**: Implemented a "PINNED TAGS" master section to centralize high-priority navigation. Surfaced Recents/Favorites via usage analytics and created a "Stealth Folder" for hidden tags.
+- [DONE] **Trash Auto-Purge & Safety**: Built a 30-day background cleaner and added pulsing countdown indicators to trashed cards. Implemented one-click "Restore" to eliminate accidental deletion friction.
+- [DONE] **Scroll Stability (ResizeObserver)**: Eliminated "scroll jumps" by using `ResizeObserver` and content-based height estimation for virtualized note cards.
+- [DONE] **Local-First Write-Ahead Buffer**: Implemented an "Instant Save" layer in `localStorage`. Changes are cached locally before Firebase sync, with a recovery engine that pushes orphaned data on app startup—preventing data loss in stale tabs.
+- [DONE] **Smart Internal Linking**: 
+    - **Auto-Title on Type**: Typing `::id` + `Enter` now fetches and inserts the note's real title.
+    - **Mixed-Paste Resolution**: Pasting text with multiple IDs automatically converts all of them into titled links.
+    - **Hover Previews**: Added a debounced tooltip that shows a content snippet when hovering over internal links.
+- [DONE] **Disappearing Text Fix**: Resolved the "Quick-Reopen Race Condition" by making the editor trust its local DOM instance when the same note is toggled rapidly.
+- [DONE] **Hardened Identity Isolation**: 
+    - **Active ID Guard**: Implemented an `activeIdRef` in the `NoteEditor` to force a 100% state wipe when switching between different notes, preventing "data bleeding."
+    - **Snapshot Shielding**: Configured the editor to ignore background Firestore snapshots for the currently open note, fixing the "revert-on-close" bug.
+    - **Atomic Save & "Done" Button**: Added an explicit "Done" button and synchronized the save-then-close flow to ensure data is committed before the editor unmounts.
+    - **Network-First Service Worker**: Switched the PWA caching strategy to "Network-First" for local JS/CSS files, ensuring code updates are live immediately.
+- [DONE] **Settings & Export Visibility**:
+    - **Widened Settings Modal**: Increased modal width to `max-w-2xl` for better layout and discoverability.
+    - **Scrollable Tabs**: Enabled horizontal scrolling for the Settings tab bar to handle overflow on small screens.
+    - **Backup & Export Naming**: Renamed the "Backup" tab to "Backup & Export" for clearer feature categorization.
+- [DONE] **Sync & Editor Stability**:
+    - **Zero-Width Space Cleanup**: Fixed exponential bloat of hidden characters (`\u200B`) and inconsistent line-ending normalization that caused phantom sync conflicts.
+    - **Conflict Ready Gate**: Implemented a 100ms "initialization lock" to prevent race conditions during local Markdown migration.
+    - **Structural DOM Protection**: Switched the editor to `dangerouslySetInnerHTML` to prevent React from accidentally clearing content during re-renders.
+    - **Checklist State Sync**: Fixed a bug where checking a task item would occasionally fail to persist due to stale "Hide Completed" toggle awareness.
+    - [DONE] **Hardened Persistence & Update Path**: 
+        - Fixed a critical bug in `handleSaveNote` that accidentally cleared the entire local save buffer on every successful save.
+        - Unified all note updates (`color`, `pin`, `archive`, `tags`, `checklists`) into the `handleSaveNote` pipeline. 
+        - This ensures all property changes benefit from **Write-Ahead Buffering**, **Optimistic UI Updates**, and **Automatic Recovery**—resolving the "disappearing color" and sync-loss bugs.
+    - [DONE] **Optimistic List Sync**: Updated `NoteProvider` to optimistically sync the background notes list, ensuring `handleBack` and link navigation always find the freshest data.
+    - [DONE] **Freshest Version Logic & Conflict Shielding**:
+        - **Buffer-First Loading**: Re-engineered `onEdit`, `handleInternalLinkClick`, and `handleBack` to prioritize the `localStorage` write-ahead buffer and `currentNote` state over the background Firestore list.
+        - **Sync Conflict De-Noising**: Initialized the editor's typing tracker to `0` on mount to prevent false-positive conflict warnings triggered by immediate background snapshots.
+        - **Robust Optimistic Injection**: Hardened `handleSaveNote` to immediately inject updates into the local state, ensuring the UI remains consistent even if the server snapshot is delayed or stale.
+    - [DONE] **Persistent Linked Navigation**:
+        - **Navigation Saves**: Implemented automatic state committing when switching notes via internal links or the "Back" button, preventing data loss during multi-note editing sessions.
+        - **Persistent Undo History**: Re-engineered the history system to save snapshots to `localStorage` with a 24-hour expiration. Users can now `Ctrl+Z` to restore edits from previous sessions.
+        - **Global History Purge**: Added a background cleanup routine to eliminate expired history snapshots and prevent storage bloat.
+
+- [DONE] **Smart Brain Core**: 
+    - **Semantic Search**: Integrated local vector caching in IndexedDB for conceptual, meaning-based search results.
+    - **Auto-Tagging**: Implemented multi-provider tag suggestions (Ollama/OpenAI/Gemini) with one-tap chips.
+    - **OCR & Audio**: Added image-to-text extraction and live voice-to-text transcription.
+    - **Hybrid Fallback**: Built a 3-tier reliability system (Local -> Cloud -> In-Browser).
+- [DONE] **Internal Link System Hardening**:
+    - **Syntax & Format Alignment**: Fixed an issue where internal links were incorrectly formatted with the full note title and raw Markdown syntax. Updated editor key handlers to represent link text to `::shortId` and cleaned Markdown syntax during conversion.
+    - **Back Navigation Shielding**: Fixed a React crash caused by the missing `ArrowLeft` icon in `icons.js` when clicking a note from maximized mode and navigating backwards.
+    - **Link Preview Stability**: Fixed an "Element type is invalid" React runtime crash when hovering over or navigating through internal links in maximized note view, by adding the missing `MousePointer` icon definition to `icons.js`.
+    - [DONE] **PWA Reminders & Notification Infrastructure (Zero-Polling Serverless)**:
+    - Built a dynamic scheduler architecture using Cloud Functions for Firebase and Google Cloud Tasks.
+    - Implemented a self-healing client-side feature detection system, ready to migrate to native OS `NotificationTriggers` when supported.
+    - Integrated automatic service worker (`sw.js`) push listeners with background wakeup, vibration patterns, and client-focus window deep-linking (`/?note={noteId}`).
+    - Configured a zero-config, self-healing queue check inside `onNoteReminderWrite` that creates the required `reminder-queue` on the fly.
+    - Enforced automated Daily Cleanup policies for Google Artifact Registry to keep container image storage completely free.
+- [DONE] **Google Keep Checklist Phantoms**:
+    - Rewrote the markdown parsing and rendering engine inside `utils.js` to build hierarchical checkpoints.
+    - If a nested checklist sub-item is completed while the parent remains active, the parent is cloned as a greyed-out read-only "phantom" to align the completed section's grid.
+    - Custom editor parser overrides ignore `.task-line-phantom` nodes during save commits to eliminate markdown duplication.
+- [DONE] **Graph Node Editing (Long Press / Right Click)**:
+    - Added right-click (`onContextMenu`) and touch-hold (long press for 600ms with device haptic feedback) listeners to the graph view.
+    - Interacting with any node seamlessly opens and centers the note for instant full editor editing.
+- [DONE] **Collapsible Archived Tag Section**:
+    - Created the `TagArchivedSection` UI component to group and isolate archived notes.
+    - When viewing a tag, active notes are displayed prominently, and archived notes are hidden at the bottom behind a clean collapsible toggle button.
+- [DONE] **UI/UX Refinements**:
+    - Optimized the sync & save toast timer: reduced the "Saved & Synced" popup duration from 10 seconds down to a snappier 3.5 seconds.
+    - Hardened checklist backspace/delete behavior to protect checkboxes and drag handles from structural deletions.
+- [DONE] **Editor Blank Line Stability**: Identified and resolved a recursive formatting bug in `parseHtmlToMarkdown` where block elements (like `DIV` and `P` containing only `<br>`) were converted to double newlines (`\n\n`) instead of a single newline. This completely eliminates the issue of blank lines multiplying every time a note is opened and closed.
+- [DONE] **Graph View Context Menu Suppression**: Disabled the default browser right-click context menu within the `GraphView` canvas by intercepting `onContextMenu` on its outermost container wrapper. Custom interactions (such as node editing and edge deletion) are fully preserved, and normal right-click remains functional in the rest of the application.
+- [DONE] **Multi-Line List Tab Indentation**: Re-engineered the Tab/Shift-Tab list key handler in `NoteEditor` to find and update all list items (`li`) intersecting a multi-line selection via the DOM `range.intersectsNode` API. This replaces the old behavior where selecting multiple lines and hitting tab deleted the selection.
+- [DONE] **Global Preview Line Limit Setting**: Added a customizable limit for maximum visible note length in preview cards. Renamed the existing list item limit to "List Preview Line Limit" and introduced a new "Global Preview Line Limit" switch with an interactive range slider (1 to 25 lines) in Settings. Persisted the settings via `localStorage` and Firestore and adjusted the card virtual height estimation to prevent visual jumps.
+
+## 🔴 Current Focus (P2) - Integration & Semantic Orchestration
+- [TODO] **Semantic Orchestration**: 
+    - **Tag Relationship Suggestions**: AI analysis of tag usage to suggest hierarchy (parent/child) and semantic links (causes/prevents/explains).
+    - **Ghost Links in Graph**: Visualizing suggested connections in the graph view as dashed lines for one-click approval.
+    - **Synonym & Redundancy Detection**: Identifying overlapping tags and suggesting merges.
+- [TODO] **MCP Integration**: Model Context Protocol support for LLM interactions.
+- [TODO] **Scheduled Backups**: Automated Google Drive JSON exports.
+- [TODO] **Offline-First Queue**: Robust sync queue for poor connectivity.
+- [ ] **KeepIt Connect (External API & Agent Integration)**:
+    - Implement a Firebase Cloud Function gateway for REST API access.
+    - Add persistent API Key generation and management to the web settings UI.
+    - Build core endpoints for CRUD operations and Search logic.
+    - Publish standard Agent Tool Definitions (OpenAPI/JSON) for seamless integration with LLM assistants (e.g., "Create Note", "Search Notes").

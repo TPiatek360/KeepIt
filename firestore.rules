@@ -1,0 +1,18 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Lock down the database by default
+    
+    // Allow users to access their own data in the 'users' collection
+    match /artifacts/{appId}/users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Allow reading and writing shared notes via collectionGroup
+    match /{path=**}/notes/{noteId} {
+      allow read, write: if request.auth != null && 
+                           request.auth.token.email != null && 
+                           resource.data.sharedWith.hasAny([request.auth.token.email]);
+    }
+  }
+}

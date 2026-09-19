@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KeepIt Pro</title>
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" href="favicon-32x32.png" type="image/png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#ffffff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="pwa-icon.png">
+    
+    <!-- Tailwind CSS with Dark Mode Config -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            750: '#2d3748',
+                            850: '#1a202c',
+                            950: '#0d1117',
+                        }
+                    },
+                    animation: {
+                        'shake': 'shake 0.82s cubic-bezier(.36,.07,.19,.97) both',
+                    },
+                    keyframes: {
+                        shake: {
+                            '10%, 90%': { transform: 'translate3d(-1px, 0, 0)' },
+                            '20%, 80%': { transform: 'translate3d(2px, 0, 0)' },
+                            '30%, 50%, 70%': { transform: 'translate3d(-4px, 0, 0)' },
+                            '40%, 60%': { transform: 'translate3d(4px, 0, 0)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel (for JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- Tesseract.js for OCR -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-sans h-screen flex flex-col overflow-hidden transition-colors duration-200">
+    <div id="root" class="flex-1 flex flex-col h-full overflow-hidden"></div>
+
+    <!-- Firebase Init (Module) -->
+    <script type="module" src="js/firebase-init.js?v=3"></script>
+
+    <!-- App Logic (Babel/JSX) -->
+    <script type="text/babel" src="js/utils.js?v=3"></script>
+    <script type="text/babel" src="js/contexts.js?v=3"></script>
+    <script type="text/babel" src="js/icons.js?v=3"></script>
+    <script type="text/babel" src="js/components/ui.js?v=3"></script>
+    <script type="text/babel" src="js/components/modals.js?v=3"></script>
+    <script type="text/babel" src="js/components/sidebar.js?v=3"></script>
+    <script type="text/babel" src="js/components/cards.js?v=3"></script>
+    <script type="text/babel" src="js/components/editor.js?v=3"></script>
+    <script type="text/babel" src="js/components/graph-view.js?v=3"></script>
+    <script type="text/babel" src="js/components/stats-view.js?v=3"></script>
+    <script type="text/babel" src="js/app.js?v=3"></script>
+
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                // Nuclear Option: Unregister all previous SWs to fix the Blob URL caching issue
+                try {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    for (const registration of registrations) {
+                        if (!registration.active || !registration.active.scriptURL.includes('sw.js')) {
+                             console.log('Unregistering old SW:', registration);
+                             await registration.unregister();
+                        }
+                    }
+                } catch (e) { console.error('SW Cleanup error', e); }
+
+                // Register new SW
+                try {
+                    const registration = await navigator.serviceWorker.register('/sw.js');
+                    console.log('ServiceWorker registration successful:', registration.scope);
+                    
+                    registration.onupdatefound = () => {
+                        const installingWorker = registration.installing;
+                        installingWorker.onstatechange = () => {
+                            if (installingWorker.state === 'installed') {
+                                if (navigator.serviceWorker.controller) {
+                                    console.log('New content is available; please refresh.');
+                                } else {
+                                    console.log('Content is cached for offline use.');
+                                }
+                            }
+                        };
+                    };
+                } catch (err) {
+                    console.warn('ServiceWorker registration failed:', err);
+                }
+            });
+        }
+    </script>
+</body>
+</html>

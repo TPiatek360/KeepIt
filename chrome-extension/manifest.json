@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "KeepIt Clipper",
+  "version": "1.0",
+  "description": "Save URLs, text, and images to KeepIt.",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_title": "Save to KeepIt"
+  }
+}
